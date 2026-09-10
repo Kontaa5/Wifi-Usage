@@ -36,7 +36,21 @@ struct Store: Codable {
     var lastDown: UInt64? = nil
     var lastUp: UInt64? = nil
     var months: [String: [String: Usage]] = [:]   // "YYYY-MM" -> netKey -> Usage
-    var names: [String: String] = [:]             // netKey -> Anzeigename
+    var names: [String: String] = [:]             // netKey -> automatischer Name (SSID/Heuristik)
+    var aliases: [String: String] = [:]           // netKey -> vom Nutzer vergebener Name
+
+    init() {}
+
+    // Tolerantes Einlesen: fehlende Felder -> Standardwert (kein Datenverlust bei Updates).
+    enum CodingKeys: String, CodingKey { case lastDown, lastUp, months, names, aliases }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastDown = try c.decodeIfPresent(UInt64.self, forKey: .lastDown)
+        lastUp   = try c.decodeIfPresent(UInt64.self, forKey: .lastUp)
+        months   = try c.decodeIfPresent([String: [String: Usage]].self, forKey: .months) ?? [:]
+        names    = try c.decodeIfPresent([String: String].self, forKey: .names) ?? [:]
+        aliases  = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
+    }
 }
 
 // MARK: - Persistenz
@@ -227,6 +241,10 @@ enum Meter {
     static func name(for key: String) -> String {
         Storage.shared.store.names[key] ?? key
     }
+    /// Anzeigename: vom Nutzer vergebener Alias > automatischer Name > Schlüssel.
+    static func displayName(for key: String) -> String {
+        Storage.shared.store.aliases[key] ?? Storage.shared.store.names[key] ?? key
+    }
 }
 
 // MARK: - Formatierung
@@ -251,7 +269,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Zwei Zeilen im Stats-Stil: oben klein das Netz, unten groß die GB.
     func updateTitle() {
         let net = NetID.current()
-        let topText = net?.name ?? "kein WLAN"
+        let topText = net.map { Storage.shared.store.aliases[$0.key] ?? $0.name } ?? "kein WLAN"
         var bottomText = "–"
         var warn = false
         if let net = net {
@@ -263,8 +281,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     static func renderTwoLine(top: String, bottom: String, warn: Bool) -> NSImage {
-        let topFont = NSFont.systemFont(ofSize: 7, weight: .regular)
-        let botFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        let topFont = NSFont.systemFont(ofSize: 7, weight: .regular)    // Netz-Name (obere Zeile)
+        let botFont = NSFont.systemFont(ofSize: 11, weight: .semibold)  // GB-Wert (untere Zeile)
+        // Template-Bild: Farbe egal, macOS tönt es passend zur Menüleiste (Light/Dark).
+        // Obere Zeile mit weniger Deckkraft -> wirkt dezenter (wie das CPU/GPU-Label).
         let topColor = NSColor.black.withAlphaComponent(0.6)
         let botColor = warn ? NSColor.systemRed : NSColor.black
         let topStr = NSAttributedString(string: top, attributes: [.font: topFont, .foregroundColor: topColor])
@@ -279,7 +299,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         botStr.draw(at: NSPoint(x: (w - bs.width) / 2, y: 0))
         topStr.draw(at: NSPoint(x: (w - ts.width) / 2, y: h - ts.height + 1))
         img.unlockFocus()
-        img.isTemplate = !warn
+        img.isTemplate = !warn   // adaptiv (folgt der Menüleiste); nur bei Limit fest rot
         return img
     }
 
@@ -291,7 +311,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let net = NetID.current()
         let curKey = Meter.monthKey()
 
-        let head = NSMenuItem(title: "Aktuelles WLAN: \(net?.name ?? "– keins")", action: nil, keyEquivalent: "")
+        let curName = net.map { Storage.shared.store.aliases[$0.key] ?? $0.name } ?? "– keins"
+        let head = NSMenuItem(title: "Aktuelles WLAN: \(curName)", action: nil, keyEquivalent: "")
         head.isEnabled = false
         menu.addItem(head)
         if let net = net {
@@ -340,11 +361,35 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (key, u) in month.sorted(by: { $0.value.total > $1.value.total }) {
             let over = Double(u.total) / GIB > LIMIT_GB
             let extra = over ? "   (über \(Int(LIMIT_GB)) GB)" : ""
-            let it = NSMenuItem(title: "\(Meter.name(for: key)) — \(gb(u.total))\(extra)",
-                                action: nil, keyEquivalent: "")
-            it.isEnabled = false
+            // klickbar: öffnet den Umbenennen-Dialog
+            let it = NSMenuItem(title: "\(Meter.displayName(for: key)) — \(gb(u.total))\(extra)",
+                                action: #selector(renameNet(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = key
+            it.toolTip = "Klicken, um dieses Netz umzubenennen"
             if key == highlight { it.state = .on }   // nativer Haken beim aktuellen Netz
             menu.addItem(it)
+        }
+    }
+
+    // Netz umbenennen: Klick auf einen Eintrag öffnet ein Eingabefeld.
+    @objc func renameNet(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        let alert = NSAlert()
+        alert.messageText = "Netz umbenennen"
+        alert.informativeText = "Eigener Name für dieses WLAN (leer = automatischer Name):"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = Storage.shared.store.aliases[key] ?? Meter.name(for: key)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Speichern")
+        alert.addButton(withTitle: "Abbrechen")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            let v = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.isEmpty { Storage.shared.store.aliases.removeValue(forKey: key) }
+            else { Storage.shared.store.aliases[key] = v }
+            Storage.shared.save()
+            updateTitle()
         }
     }
 
