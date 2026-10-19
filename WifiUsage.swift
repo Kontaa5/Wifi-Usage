@@ -125,6 +125,10 @@ final class Prefs: ObservableObject {
         didSet { UserDefaults.standard.set(language.rawValue, forKey: "language"); onChange?() }
     }
     @Published var locationGranted = false   // vom AppController gesetzt
+    /// Eigene iPhones/iPads (gleiche Apple-ID) immer im Menü, auch mit ausgeschaltetem Hotspot.
+    @Published var instantHotspot = UserDefaults.standard.object(forKey: "instantHotspot") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(instantHotspot, forKey: "instantHotspot"); onChange?() }
+    }
 
     var isGerman: Bool {
         switch language {
@@ -371,6 +375,88 @@ enum CoreWiFi {
         let ok = unsafeBitCast(i.method(for: assocSel), to: BoolFn.self)(i, assocSel, params, &error)
         if i.responds(to: NSSelectorFromString("invalidate")) { _ = i.perform(NSSelectorFromString("invalidate")) }
         return ok ? nil : (error?.localizedDescription ?? "Verbinden abgelehnt")
+    }
+}
+
+// MARK: - Instant Hotspot (Apples interne Sharing-Schnittstelle)
+/// Findet eigene iPhones/iPads (gleiche Apple-ID) per Bluetooth — auch mit ausgeschaltetem
+/// Hotspot — und schaltet ihren Hotspot ein, wie „Persönlicher Hotspot" in Apples WLAN-Menü.
+/// Privat und undokumentiert: Ändert Apple sie, findet die Suche einfach keine Geräte mehr.
+final class RemoteHotspot: NSObject {
+    struct Device {
+        let name: String          // = Netzname des Hotspots
+        let network: String?      // „LTE", „5G" …
+        let battery: Int?         // Prozent
+        let object: NSObject      // für den Weckruf
+        let seenAt: Date
+    }
+    static let shared = RemoteHotspot()
+    var onChange: (() -> Void)?
+    private(set) var devices: [String: Device] = [:]   // nur auf dem Hauptthread
+    private var session: NSObject?
+
+    private static let loaded = dlopen("/System/Library/PrivateFrameworks/Sharing.framework/Sharing", RTLD_NOW) != nil
+
+    /// Suche starten (beim Öffnen des Menüs). Erste Treffer kommen nach Sekundenbruchteilen.
+    func start() {
+        guard session == nil, Self.loaded, let cls = NSClassFromString("SFRemoteHotspotSession") as? NSObject.Type else { return }
+        let s = cls.init()
+        s.setValue(self, forKey: "delegate")
+        _ = s.perform(NSSelectorFromString("startBrowsing"))
+        session = s
+    }
+
+    func stop() {
+        _ = session?.perform(NSSelectorFromString("stopBrowsing"))
+        session = nil
+    }
+
+    @objc(session:updatedFoundDevices:)
+    func session(_ session: AnyObject, updatedFoundDevices list: AnyObject?) {
+        let objs = (list as? [NSObject]) ?? ((list as? NSSet)?.allObjects as? [NSObject] ?? [])
+        RunLoop.main.perform(inModes: [.common]) {
+            self.devices = [:]   // jede Meldung ist die vollständige Liste
+            for o in objs {
+                guard let name = o.value(forKey: "deviceName") as? String, !name.isEmpty else { continue }
+                let battery = (o.value(forKey: "batteryLife") as? NSNumber)?.intValue
+                self.devices[name] = Device(name: name, network: Self.networkName(o),
+                                            battery: battery.flatMap { (0...100).contains($0) ? $0 : nil },
+                                            object: o, seenAt: Date())
+            }
+            self.onChange?()
+        }
+    }
+
+    /// Netzart, wie Apple sie selbst beschriftet („LTE", „5G" …) — steht in der Gerätebeschreibung;
+    /// networkType selbst ist nur eine undokumentierte Zahl.
+    private static func networkName(_ o: NSObject) -> String? {
+        let d = String(describing: o)
+        guard let r = d.range(of: "network type: [^,>]+", options: .regularExpression) else { return nil }
+        let v = d[r].dropFirst("network type: ".count).trimmingCharacters(in: .whitespaces)
+        return v.isEmpty || v.lowercased().contains("unknown") ? nil : v
+    }
+
+    /// Hotspot einschalten (blockiert bis zur Antwort, max. 15 s — nur aus dem Hintergrund
+    /// aufrufen). Liefert Netzname und Passwort, das das iPhone dafür zurückgibt.
+    static func enable(_ device: NSObject) -> (ssid: String?, password: String?)? {
+        guard let s = shared.sessionForCall() else { return nil }
+        let done = DispatchSemaphore(value: 0)
+        var result: (String?, String?)?
+        let cb: @convention(block) (AnyObject?, AnyObject?) -> Void = { a, b in
+            result = (a as? String, b as? String)
+            done.signal()
+        }
+        typealias Fn = @convention(c) (AnyObject, Selector, AnyObject, AnyObject) -> Void
+        let sel = NSSelectorFromString("enableHotspotForDevice:withCompletionHandler:")
+        guard s.responds(to: sel) else { return nil }
+        unsafeBitCast(s.method(for: sel), to: Fn.self)(s, sel, device, cb as AnyObject)
+        return done.wait(timeout: .now() + 15) == .success ? result : nil
+    }
+
+    private func sessionForCall() -> NSObject? {
+        if let s = session { return s }
+        guard Self.loaded, let cls = NSClassFromString("SFRemoteHotspotSession") as? NSObject.Type else { return nil }
+        return cls.init()
     }
 }
 
@@ -783,6 +869,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         // Nie den macOS-Dialog „… möchte auf Schlüssel … zugreifen“: Ist der eigene Eintrag nicht
         // ohne Rückfrage lesbar (z. B. nach einem Neubau), gilt er still als nicht vorhanden.
         SavedPasswords.disableKeychainPrompts()
+        RemoteHotspot.shared.onChange = { [weak self] in if self?.openMenu != nil { self?.updatePanel() } }
         Prefs.shared.onChange = { [weak self] in self?.prefsChanged() }
         Actions.openSettings = { [weak self] in self?.openSettings() }
         Actions.openLocationSettings = { [weak self] in self?.openLocationSettings() }
@@ -982,11 +1069,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         // Systembefehle beim Öffnen; die Suche läuft im Hintergrund und aktualisiert live.
         build(menu)
         scanAsync()
+        if Prefs.shared.instantHotspot { RemoteHotspot.shared.start() }   // eigene iPhones per Bluetooth
     }
     func menuWillOpen(_ menu: NSMenu) { openMenu = menu }
     func menuDidClose(_ menu: NSMenu) {
         openMenu = nil
         autoClose?.invalidate(); autoClose = nil
+        RemoteHotspot.shared.stop()
     }
 
     /// Nach einer Aktion (WLAN wechseln, ein/aus) bleibt das Menü offen und schließt sich erst
@@ -1046,9 +1135,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             let known = knownNetworks
             // verbundenes zuerst, dann bekannte in Reichweite (stärkstes Signal zuerst)
             var names = known.filter { inRange[$0] != nil }.sorted { inRange[$0]!.rssi > inRange[$1]!.rssi }
+            // Eigene iPhones/iPads immer, auch mit ausgeschaltetem Hotspot (Klick weckt ihn auf)
+            let phones = Prefs.shared.instantHotspot ? RemoteHotspot.shared.devices : [:]
+            let phoneNames = phones.keys.sorted()
+            names.removeAll { phones[$0] != nil }
+            names.insert(contentsOf: phoneNames, at: 0)
             if let cur = net?.name { names.removeAll { $0 == cur }; names.insert(cur, at: 0) }
 
             func row(_ ssid: String, known: Bool) -> RowInfo {
+                let phone = phones[ssid]
                 let connected = ssid == net?.name
                 let u = Meter.usage(month: month, name: ssid)
                 let rssi = inRange[ssid]?.rssi ?? (connected ? Wifi.iface?.rssiValue() : nil)
@@ -1056,23 +1151,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                     : ssid == failed ? failedReason
                     : (connected || u.total > 0) && known ? gb(u.total) : nil
                 let offline = connected && noInternet
+                let phoneInfo = phone.map { p in
+                    ([L("Hotspot", "Hotspot"), p.network] + [p.battery.map { "\($0) %" }]).compactMap { $0 }.joined(separator: " · ")
+                }
                 return RowInfo(ssid: ssid, detail: detail,
-                               symbol: offline ? "wifi.exclamationmark" : NetID.isHotspot(ssid) ? "personalhotspot" : "wifi",
+                               symbol: offline ? "wifi.exclamationmark" : phone != nil || NetID.isHotspot(ssid) ? "personalhotspot" : "wifi",
                                signal: rssi.map { Wifi.level($0) }, connected: connected,
                                secure: inRange[ssid]?.secure ?? true, known: known,
                                tooltip: u.total > 0 ? "↓ \(gb(u.down))   ↑ \(gb(u.up)) " + L("diesen Monat", "this month") : nil,
                                joining: ssid == joining,
                                subtitle: offline ? L("Keine Internetverbindung", "No internet connection")
-                                   : nil)
+                                   : phoneInfo)
             }
-            // Eine Liste: verbundenes, dann in Reichweite (stärkstes Signal). Nur was die Suche
-            // gerade findet — auch Hotspots (Ketten-Symbol); Instant Hotspot ist für fremde Apps gesperrt.
+            // Eine Liste: verbundenes, eigene iPhones (Instant Hotspot), dann in Reichweite
+            // (stärkstes Signal) — Hotspots mit Ketten-Symbol.
             c.known = names.map { row($0, known: true) }
             if names.isEmpty {
                 c.knownHint = scanning ? L("Suche nach Netzwerken …", "Searching for networks …")
                                        : L("Keine bekannten Netzwerke in Reichweite", "No known networks in range")
             }
-            c.others = inRange.filter { !known.contains($0.key) && $0.key != net?.name }
+            c.others = inRange.filter { !known.contains($0.key) && $0.key != net?.name && phones[$0.key] == nil }
                 .sorted { $0.value.rssi > $1.value.rssi }.map { row($0.key, known: false) }
             if c.others.isEmpty {
                 c.othersHint = !locationGranted ? L("Ortungsdienste nötig, um Netze zu finden", "Location Services needed to find networks")
@@ -1145,6 +1243,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     func select(_ row: RowInfo) {
         let ssid = row.ssid
         if row.connected { openMenu?.cancelTracking(); openOverview(); return }
+        if Prefs.shared.instantHotspot, let phone = RemoteHotspot.shared.devices[ssid] { joinHotspot(phone); return }
         // Gespeichertes Netz (offen, WPA oder Enterprise): wie Apples WLAN-Menü über das von macOS
         // gespeicherte Profil — das Passwort holt sich macOS selbst, Wifi Usage braucht keins.
         if row.known && !askAgain.contains(ssid) {
@@ -1164,6 +1263,27 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             return
         }
         joinWithCredentials(row, interactive: true)
+    }
+
+    /// Eigenes iPhone: Hotspot per Bluetooth einschalten (wie Apples „Persönlicher Hotspot"),
+    /// gezielt suchen — ein frisch geweckter Hotspot taucht erst nach ein paar Sekunden auf —
+    /// und verbinden: bekanntes Netz über Apples Profil, sonst mit dem Passwort vom iPhone.
+    func joinHotspot(_ phone: RemoteHotspot.Device) {
+        let ssid = phone.name
+        let known = knownNetworks.contains(ssid)
+        connect(ssid, attempt: {
+            let reply = RemoteHotspot.enable(phone.object)
+            NSLog("Wifi Usage: Hotspot \(ssid) " + (reply == nil ? "nicht geweckt" : "geweckt"))
+            guard let iface = Wifi.iface else { return "WLAN nicht verfügbar" }
+            for _ in 0..<6 {   // je Suche 2–4 s
+                guard let n = (try? iface.scanForNetworks(withName: ssid, includeHidden: true))?
+                        .max(by: { $0.rssiValue < $1.rssiValue }) else { continue }
+                if known { return CoreWiFi.joinKnown(ssid) }
+                do { try iface.associate(to: n, password: reply?.password); return nil }
+                catch { return error.localizedDescription }
+            }
+            return "Netz nicht in Reichweite"
+        }, retry: known ? { CoreWiFi.joinKnown(ssid, freshScan: true) } : nil)
     }
 
     /// Verbinden über CoreWLAN mit eigenen Zugangsdaten. Was das Netz verlangt und ob Zugangsdaten
@@ -2508,13 +2628,20 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section(L("Allgemein", "General")) {
+            Section {
                 Picker(L("Sprache", "Language"), selection: $prefs.language) {
                     ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
                 }
                 Picker(L("Menüleiste", "Menu bar"), selection: $prefs.style) {
                     ForEach(BarStyle.allCases) { Text($0.title).tag($0) }
                 }
+                Toggle(L("iPhone-Hotspot immer anzeigen", "Always show iPhone hotspot"), isOn: $prefs.instantHotspot)
+            } header: {
+                Text(L("Allgemein", "General"))
+            } footer: {
+                Text(L("Deine iPhones und iPads mit derselben Apple-ID stehen im Menü, auch wenn ihr Hotspot aus ist. Ein Klick schaltet ihn per Bluetooth ein und verbindet – wie bei Apple.",
+                       "Your iPhones and iPads with the same Apple ID appear in the menu even when their hotspot is off. One click turns it on via Bluetooth and joins – like Apple's menu."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {

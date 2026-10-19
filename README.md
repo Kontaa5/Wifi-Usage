@@ -108,9 +108,13 @@ passt sich automatisch an die Menüleiste an (dunkel bei heller Leiste, hell bei
 Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
 
 - **Schalter** oben schaltet das WLAN ein/aus (blau = an).
-- **Hotspots** stehen mit Ketten-Symbol in derselben Liste „Bekannte Netzwerke“ — nur wenn sie
-  gerade in Reichweite sind (wie alle Netze). Ein schlafender iPhone-Hotspot lässt sich nur über
-  Apples Instant Hotspot aufwecken — das ist für fremde Apps gesperrt.
+- **Hotspots** stehen mit Ketten-Symbol in derselben Liste „Bekannte Netzwerke“.
+- **Eigene iPhones/iPads (Instant Hotspot):** Geräte mit derselben Apple-ID stehen immer im Menü,
+  auch wenn ihr Hotspot aus ist — mit Netzart und Akku („Hotspot · LTE · 75 %“). Ein Klick
+  schaltet den Hotspot per Bluetooth ein, sucht gezielt danach und verbindet (bekanntes Netz über
+  Apples Profil, sonst mit dem Passwort, das das iPhone mitschickt), wie Apples „Persönlicher
+  Hotspot“. Dauert etwa 10–15 Sekunden. Abschaltbar: Einstellungen › „iPhone-Hotspot immer
+  anzeigen“. Nutzt Apples interne Sharing-Schnittstelle; Bluetooth muss an sein.
 - Beim Öffnen sucht das Widget sofort neu (kleiner Warte-Kreis neben dem Schalter); Netze, die
   nicht mehr gefunden werden, verschwinden nach 30 Sekunden.
 - **Bekannte Netzwerke:** nur gespeicherte Netze, die gerade in Reichweite sind (stärkstes Signal zuerst), das verbundene oben mit blauem Kreis. Rechts
