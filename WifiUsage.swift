@@ -398,6 +398,13 @@ enum SavedPasswords {
     /// Nach einer Ablehnung wieder einen Leseversuch erlauben (z. B. beim Öffnen der Einstellungen).
     static func allowRetry() { lock.lock(); unreadable = false; lock.unlock() }
 
+    /// Schlüsselbund-Abfragen dieses Prozesses scheitern still (errSecInteractionNotAllowed),
+    /// statt nach dem Mac-Passwort zu fragen. Touch ID (LocalAuthentication) bleibt unberührt.
+    static func disableKeychainPrompts() {
+        let status = SecKeychainSetUserInteractionAllowed(false)
+        if status != errSecSuccess { NSLog("Wifi Usage: Schlüsselbund-Abfragen nicht abschaltbar (Status \(status))") }
+    }
+
     private static func query(_ service: String, _ account: String?) -> [String: Any] {
         var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
         if let a = account { q[kSecAttrAccount as String] = a }
@@ -773,6 +780,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         statusItem.button?.imagePosition = .imageOnly
 
         installEditMenu()
+        // Nie den macOS-Dialog „… möchte auf Schlüssel … zugreifen“: Ist der eigene Eintrag nicht
+        // ohne Rückfrage lesbar (z. B. nach einem Neubau), gilt er still als nicht vorhanden.
+        SavedPasswords.disableKeychainPrompts()
         Prefs.shared.onChange = { [weak self] in self?.prefsChanged() }
         Actions.openSettings = { [weak self] in self?.openSettings() }
         Actions.openLocationSettings = { [weak self] in self?.openLocationSettings() }
@@ -1130,45 +1140,64 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         }
     }
 
-    /// Klick auf ein Netz: verbundenes -> Übersicht, bekanntes -> verbinden (Menü bleibt offen),
-    /// fremdes -> verbinden, bei Passwortschutz vorher Passwort abfragen (dafür schließt das Menü).
+    /// Klick auf ein Netz: verbundenes -> Übersicht, gespeichertes -> über Apples Profil verbinden
+    /// (Menü bleibt offen), fremdes -> verbinden, bei Passwortschutz vorher Passwort abfragen.
     func select(_ row: RowInfo) {
         let ssid = row.ssid
         if row.connected { openMenu?.cancelTracking(); openOverview(); return }
-        // Was das Netz verlangt und ob Zugangsdaten gespeichert sind, im Hintergrund klären
-        // (Netzsuche bzw. Schlüsselbund-Abfrage dürfen das Menü nicht einfrieren).
-        let seen = inRange[ssid]
-        let askAgainNow = askAgain.contains(ssid)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let (secure, enterprise) = self.security(of: ssid, seen: seen)
-            let saved = secure ? SavedPasswords.get(ssid) : nil
-            RunLoop.main.perform(inModes: [.common]) {
-                self.proceed(row, secure: secure, enterprise: enterprise, saved: askAgainNow ? nil : saved,
-                             savedUsername: saved?.username)
-            }
-        }
-    }
-
-    private func proceed(_ row: RowInfo, secure: Bool, enterprise: Bool, saved: WifiCredentials?, savedUsername: String?) {
-        let ssid = row.ssid
-        // Offenes bekanntes Netz: über das gespeicherte Profil wie Apples WLAN-Menü.
-        if row.known && !secure {
+        // Gespeichertes Netz (offen, WPA oder Enterprise): wie Apples WLAN-Menü über das von macOS
+        // gespeicherte Profil — das Passwort holt sich macOS selbst, Wifi Usage braucht keins.
+        if row.known && !askAgain.contains(ssid) {
             connect(ssid, attempt: {
                 let failure = CoreWiFi.joinKnown(ssid)
                 if let f = failure { NSLog("Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(f)") }
                 return failure
             }, retry: {
-                NSLog("Wifi Usage: \(ssid) nach 5 s nicht verbunden, neuer Versuch mit frischer Suche")
+                NSLog("Wifi Usage: \(ssid) nicht verbunden, neuer Versuch mit frischer Suche")
                 return CoreWiFi.joinKnown(ssid, freshScan: true)
+            }, completion: { [weak self] joined, message in
+                guard let self = self, !joined, message != "Netz nicht in Reichweite" else { return }
+                // Profil hat nicht gereicht (z. B. Passwort geändert): still mit eigenen
+                // Zugangsdaten versuchen, sonst beim nächsten Klick nach dem Passwort fragen.
+                self.joinWithCredentials(row, interactive: false)
             })
             return
         }
-        // Offenes fremdes Netz: direkt.
+        joinWithCredentials(row, interactive: true)
+    }
+
+    /// Verbinden über CoreWLAN mit eigenen Zugangsdaten. Was das Netz verlangt und ob Zugangsdaten
+    /// gespeichert sind, im Hintergrund klären (Netzsuche bzw. Schlüsselbund dürfen das Menü nicht
+    /// einfrieren). interactive = false: nie einen Dialog öffnen.
+    private func joinWithCredentials(_ row: RowInfo, interactive: Bool) {
+        let ssid = row.ssid
+        let seen = inRange[ssid]
+        let askAgainNow = askAgain.contains(ssid)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (secure, enterprise) = self.security(of: ssid, seen: seen)
+            let saved = secure && !askAgainNow ? SavedPasswords.get(ssid) : nil
+            RunLoop.main.perform(inModes: [.common]) {
+                self.proceed(row, secure: secure, enterprise: enterprise, saved: saved,
+                             savedUsername: saved?.username, interactive: interactive)
+            }
+        }
+    }
+
+    private func proceed(_ row: RowInfo, secure: Bool, enterprise: Bool, saved: WifiCredentials?,
+                         savedUsername: String?, interactive: Bool) {
+        let ssid = row.ssid
+        // Offenes Netz: direkt.
         if !secure { joinWithPassword(ssid, credentials: nil, save: false); return }
 
         // Geschützt: mit den in Wifi Usage gespeicherten Zugangsdaten, sonst einmal danach fragen.
         if let saved = saved, !enterprise || saved.username != nil {
             joinWithPassword(ssid, credentials: saved, save: false)
+            return
+        }
+        guard interactive else {
+            askAgain.insert(ssid)
+            if failed == ssid { failedReason = L("Passwort nötig – nochmal klicken", "Password needed – click again") }
+            updatePanel()
             return
         }
         openMenu?.cancelTracking()   // Dialog nicht hinter dem offenen Menü
@@ -1319,11 +1348,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             let started = Date()
             NSLog("Wifi Usage: Wechsel zu \(ssid) gestartet (vorher: \(Wifi.iface?.ssid() ?? "kein WLAN"))")
             var lastMessage = attempt()
+            var retried = false
+            if lastMessage != nil, let retry = retry {   // sofort abgelehnt: gleich nachfassen
+                lastMessage = retry()
+                retried = true
+            }
+            // Beide Versuche abgelehnt: nur kurz prüfen, ob es trotzdem klappt, statt 15 s zu warten.
+            let steps = retried && lastMessage != nil ? 6 : 30
             var joined = false
-            for step in 0..<30 {   // bis zu 15 s
+            for step in 0..<steps {   // bis zu 15 s
                 if Wifi.iface?.ssid() == ssid { joined = true; break }
                 if generation != self.joinGeneration { break }   // inzwischen anderes Netz gewählt
-                if step == 10, let retry = retry { lastMessage = retry() ?? lastMessage }   // nach 5 s einmal nachfassen
+                if step == 10, !retried, let retry = retry { lastMessage = retry() ?? lastMessage }   // nach 5 s einmal nachfassen
                 Thread.sleep(forTimeInterval: 0.5)
             }
             NSLog("Wifi Usage: Wechsel zu \(ssid) " + (joined ? "verbunden" : "nicht verbunden")

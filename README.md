@@ -126,17 +126,14 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
   Warte-Kreis, in der Menüleiste laufen die WLAN-Balken (wie bei Apple), danach rückt der
   blaue Kreis um.
 - **Bekannte Netze verbinden:** Wifi Usage nutzt dieselbe interne Schnittstelle wie Apples
-  WLAN-Menü (CoreWiFi) und verbindet über das gespeicherte Netzprofil, meist in unter einer
-  Sekunde.
-  - **Offene Netze** (z. B. Café-WLAN): ganz ohne Abfrage.
-  - **Geschützte Netze** (WPA, z. B. A1, Gast, iPhone-Hotspot): Beim ersten Wechsel fragt
-    Wifi Usage einmal nach dem **WLAN-Passwort** (nicht dem Mac-Passwort). Mit „Passwort merken"
-    wird es als eigener Eintrag in deinem **Anmelde-Schlüsselbund** gespeichert — verschlüsselt,
-    ohne Rückfrage lesbar nur für Wifi Usage, nie in Dateien, Log oder Befehlszeilen, und erst
-    nachdem die Verbindung damit geklappt hat. Danach wechselt ein Klick ohne Abfrage (über die
-    öffentliche CoreWLAN-Schnittstelle). Hat sich das Passwort geändert, steht „Passwort prüfen –
-    nochmal klicken"; das alte wird erst ersetzt, wenn das neue funktioniert. Verwalten und
-    löschen: Einstellungen › Gespeicherte WLAN-Passwörter.
+  WLAN-Menü (CoreWiFi) und verbindet über das von macOS gespeicherte Netzprofil — offen, WPA
+  oder Enterprise, meist in unter einer Sekunde. Das Passwort holt sich macOS selbst; Wifi Usage
+  liest dafür nichts aus dem Schlüsselbund und fragt nichts ab.
+  - **Fremde geschützte Netze:** Beim ersten Mal fragt Wifi Usage nach dem **WLAN-Passwort**
+    (nicht dem Mac-Passwort) und verbindet über CoreWLAN; danach kennt macOS das Netz. Mit
+    „Passwort merken" landet es zusätzlich verschlüsselt in deinem Anmelde-Schlüsselbund (erst
+    nachdem die Verbindung geklappt hat) — als Rückfall, falls das Apple-Profil einmal nicht reicht.
+    Klappt beides nicht (z. B. Passwort geändert), steht „Passwort nötig – nochmal klicken".
   - **Was ein Netz verlangt, erkennt Wifi Usage selbst** — der Reihe nach aus der aktuellen
     Suchliste, dem System-Zwischenspeicher, dem von macOS gespeicherten Profil und zuletzt einer
     gezielten Suche: offen oder OWE („Enhanced Open", verschlüsselt ohne Passwort) → keine
@@ -153,15 +150,11 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
     verschlüsselt in deinem Anmelde-Schlüsselbund, ohne Rückfrage lesen kann sie nur
     Wifi Usage, und gespeichert wird erst, wenn die Verbindung damit geklappt hat.
     Alle Zugangsdaten liegen zusammen in **einem** Eintrag („Wifi Usage – WLAN-Zugangsdaten“).
-    Der Schlüsselbund bindet die Freigabe an genau diese Programmversion: Nach einem Update fragt
-    macOS **einmal** nach (nicht pro Netz) — Mac-Passwort eingeben, „Immer erlauben“ wählen.
-    Danach liest Wifi Usage den Eintrag einmal und arbeitet aus dem Speicher. Lehnst du die
-    Abfrage ab, fragt Wifi Usage bis zum nächsten Start (oder bis du die Einstellungen öffnest)
-    nicht erneut — es gibt keine Abfrage-Schleife. Prüfung und Schlüsselbund laufen im
-    Hintergrund, das Menü friert dabei nicht ein. Einzeleinträge
-    älterer Versionen (bis 2.2) werden beim ersten Zugriff übernommen und gelöscht.
-    (Eine feste eigene Signatur würde das vermeiden, macht den Signierschlüssel aber zu einem
-    Einfallstor: Wer damit signieren darf, könnte die Passwörter ohne Rückfrage lesen.)
+    **Den macOS-Dialog „… möchte auf Schlüssel zugreifen“ gibt es nie:** Wifi Usage schaltet
+    Schlüsselbund-Rückfragen für sich ab. macOS bindet den Eintrag an genau diese Programmversion;
+    nach einem Update ist er deshalb still nicht lesbar und Wifi Usage verbindet einfach über
+    Apples Profile. Es gibt keine Abfrage-Schleife. Prüfung und Schlüsselbund laufen im
+    Hintergrund, das Menü friert dabei nicht ein.
   Die Schnittstelle ist privat und undokumentiert: Ändert Apple sie mit einem macOS-Update,
   zeigt das Menü „Fehlgeschlagen" und man wechselt über Apples Menü.
   (`networksetup` scheitert seit macOS 14 mit „Could not find network" bzw. Fehler -3900.)

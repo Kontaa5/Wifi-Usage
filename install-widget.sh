@@ -41,8 +41,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleExecutable</key>           <string>wifi-usage</string>
     <key>CFBundleIconFile</key>             <string>AppIcon</string>
     <key>CFBundlePackageType</key>          <string>APPL</string>
-    <key>CFBundleShortVersionString</key>   <string>2.4</string>
-    <key>CFBundleVersion</key>              <string>6</string>
+    <key>CFBundleShortVersionString</key>   <string>2.5</string>
+    <key>CFBundleVersion</key>              <string>7</string>
     <key>LSMinimumSystemVersion</key>       <string>13.0</string>
     <key>LSUIElement</key>                  <true/>
     <key>NSLocationUsageDescription</key>
@@ -53,9 +53,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 # Ad-hoc-Signatur mit fester Anforderung (nur Bundle-ID): Die Ortungsdienste-Freigabe (= WLAN-Name)
-# bleibt so über Neubauten erhalten. Gespeicherte WLAN-Passwörter bindet der Schlüsselbund dagegen
-# an genau diese Programmversion (am sichersten) — nach einem Update fragt macOS deshalb einmal
-# pro gespeichertem Netz nach („Immer erlauben").
+# bleibt so über Neubauten erhalten. Den eigenen Schlüsselbund-Eintrag bindet macOS dagegen an genau
+# diese Programmversion; Wifi Usage fragt dann nicht nach, sondern verbindet über Apples Profile.
 codesign --force --sign - --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
 echo "Installiert: $APP"
 
