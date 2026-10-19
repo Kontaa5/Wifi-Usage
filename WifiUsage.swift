@@ -1,4 +1,4 @@
-// DatenmonitorWidget.swift
+// WifiUsage.swift
 // ---------------------------------------------------------------------------
 // Menüleisten-Widget für den WLAN-Datenverbrauch — im Stats-Stil.
 // Oben klein der WLAN-Name, darunter der Verbrauch (GB) im laufenden Monat
@@ -9,7 +9,7 @@
 //
 // Netz-Erkennung:
 //   - Name = echte SSID über CoreWLAN. macOS gibt sie nur mit Ortungsdienste-Freigabe
-//     heraus, deshalb läuft das Widget als kleine Datenmonitor.app (siehe install-widget.sh).
+//     heraus, deshalb läuft das Widget als kleine Wifi Usage.app (siehe install-widget.sh).
 //   - Router-MAC (via `arp`) wird der SSID zugeordnet, damit ältere Einträge
 //     (vor der Freigabe gezählt) automatisch unter dem echten Namen zusammenlaufen.
 //
@@ -34,7 +34,7 @@ let SAMPLE_INTERVAL: TimeInterval = 20
 let GIB: Double = 1_073_741_824
 let SSID_PREFIX = "ssid:"          // Schlüssel für Netze mit bekannter SSID: "ssid:<Name>"
 let UNKNOWN_KEY = "unbekannt"       // weder SSID noch Router-MAC ermittelbar
-let APP_VERSION = "2.3"
+let APP_VERSION = "2.4"
 
 // Buy Me a Coffee: hier deinen eigenen Link eintragen (Anleitung in der README).
 let COFFEE_URL = "https://buymeacoffee.com/suntinger"
@@ -381,9 +381,9 @@ struct WifiCredentials: Codable {
     var password: String
 }
 
-/// WLAN-Zugangsdaten, die du in Datenmonitor eingegeben hast — alle zusammen in **einem**
-/// Eintrag deines Anmelde-Schlüsselbunds („Datenmonitor – WLAN-Zugangsdaten“). macOS speichert ihn
-/// verschlüsselt (entsperrt nur mit deinem Login); ohne Rückfrage lesen darf ihn nur Datenmonitor.
+/// WLAN-Zugangsdaten, die du in Wifi Usage eingegeben hast — alle zusammen in **einem**
+/// Eintrag deines Anmelde-Schlüsselbunds („Wifi Usage – WLAN-Zugangsdaten“). macOS speichert ihn
+/// verschlüsselt (entsperrt nur mit deinem Login); ohne Rückfrage lesen darf ihn nur Wifi Usage.
 /// Ein gemeinsamer Eintrag statt einem pro WLAN: Nach einem Update fragt macOS nur einmal nach,
 /// nicht für jedes Netz. Gelesen wird einmal, danach aus dem Speicher. Passwörter landen nie in
 /// Dateien, im Log oder in Prozess-Argumenten und werden erst nach erfolgreicher Verbindung gespeichert.
@@ -419,7 +419,7 @@ enum SavedPasswords {
         guard status == errSecSuccess, let data = out as? Data,
               let v = try? JSONDecoder().decode([String: WifiCredentials].self, from: data) else {
             unreadable = true
-            NSLog("Datenmonitor: gespeicherte WLAN-Zugangsdaten nicht lesbar (Status \(status)) – frage in dieser Sitzung nicht erneut")
+            NSLog("Wifi Usage: gespeicherte WLAN-Zugangsdaten nicht lesbar (Status \(status)) – frage in dieser Sitzung nicht erneut")
             return nil
         }
         cache = v
@@ -434,7 +434,7 @@ enum SavedPasswords {
         if status == errSecItemNotFound {
             var add = query(vaultService, vaultAccount)
             add[kSecValueData as String] = data
-            add[kSecAttrLabel as String] = "Datenmonitor – WLAN-Zugangsdaten"
+            add[kSecAttrLabel as String] = "Wifi Usage – WLAN-Zugangsdaten"
             add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked   // nur bei entsperrtem Mac
             status = SecItemAdd(add as CFDictionary, nil)
         }
@@ -780,7 +780,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         // Ortungsdienste: nur nötig, damit macOS den WLAN-Namen herausgibt.
         location.delegate = self
         Prefs.shared.locationGranted = locationGranted
-        NSLog("Datenmonitor: Start, Ortungsstatus \(location.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
+        NSLog("Wifi Usage: Start, Ortungsstatus \(location.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
         if location.authorizationStatus == .notDetermined {
             NSApp.activate(ignoringOtherApps: true)
             location.requestWhenInUseAuthorization()
@@ -834,7 +834,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        NSLog("Datenmonitor: Ortungsstatus \(manager.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
+        NSLog("Wifi Usage: Ortungsstatus \(manager.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
         Prefs.shared.locationGranted = locationGranted
         refresh(); scanAsync()
     }
@@ -842,7 +842,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     func prefsChanged() {
         updateTitle()
         overview.reload()
-        overviewWindow?.title = L("Datenmonitor – Übersicht", "Datenmonitor – Overview")
+        overviewWindow?.title = L("Wifi Usage – Übersicht", "Wifi Usage – Overview")
         settingsWindow?.title = L("Einstellungen", "Settings")
     }
 
@@ -1155,10 +1155,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         if row.known && !secure {
             connect(ssid, attempt: {
                 let failure = CoreWiFi.joinKnown(ssid)
-                if let f = failure { NSLog("Datenmonitor: Verbinden mit \(ssid) fehlgeschlagen: \(f)") }
+                if let f = failure { NSLog("Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(f)") }
                 return failure
             }, retry: {
-                NSLog("Datenmonitor: \(ssid) nach 5 s nicht verbunden, neuer Versuch mit frischer Suche")
+                NSLog("Wifi Usage: \(ssid) nach 5 s nicht verbunden, neuer Versuch mit frischer Suche")
                 return CoreWiFi.joinKnown(ssid, freshScan: true)
             })
             return
@@ -1166,7 +1166,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         // Offenes fremdes Netz: direkt.
         if !secure { joinWithPassword(ssid, credentials: nil, save: false); return }
 
-        // Geschützt: mit den in Datenmonitor gespeicherten Zugangsdaten, sonst einmal danach fragen.
+        // Geschützt: mit den in Wifi Usage gespeicherten Zugangsdaten, sonst einmal danach fragen.
         if let saved = saved, !enterprise || saved.username != nil {
             joinWithPassword(ssid, credentials: saved, save: false)
             return
@@ -1264,7 +1264,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 return nil
             }
             catch {
-                NSLog("Datenmonitor: Verbinden mit \(ssid) fehlgeschlagen: \(error.localizedDescription)")
+                NSLog("Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(error.localizedDescription)")
                 // Gleich ein zweiter Versuch mit frischer Suche: Hotspots scheitern beim ersten
                 // Mal oft kurz (Funkband-Wechsel), ohne dass das Passwort falsch wäre.
                 if !fresh { return attempt(fresh: true) }
@@ -1279,7 +1279,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 if save, let c = credentials {
                     DispatchQueue.global(qos: .utility).async {
                         if !SavedPasswords.set(ssid, c) {
-                            NSLog("Datenmonitor: Zugangsdaten für \(ssid) konnten nicht gespeichert werden")
+                            NSLog("Wifi Usage: Zugangsdaten für \(ssid) konnten nicht gespeichert werden")
                         }
                     }
                 }
@@ -1317,7 +1317,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         joinAnimation = anim
         DispatchQueue.global(qos: .userInitiated).async {
             let started = Date()
-            NSLog("Datenmonitor: Wechsel zu \(ssid) gestartet (vorher: \(Wifi.iface?.ssid() ?? "kein WLAN"))")
+            NSLog("Wifi Usage: Wechsel zu \(ssid) gestartet (vorher: \(Wifi.iface?.ssid() ?? "kein WLAN"))")
             var lastMessage = attempt()
             var joined = false
             for step in 0..<30 {   // bis zu 15 s
@@ -1326,7 +1326,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 if step == 10, let retry = retry { lastMessage = retry() ?? lastMessage }   // nach 5 s einmal nachfassen
                 Thread.sleep(forTimeInterval: 0.5)
             }
-            NSLog("Datenmonitor: Wechsel zu \(ssid) " + (joined ? "verbunden" : "nicht verbunden")
+            NSLog("Wifi Usage: Wechsel zu \(ssid) " + (joined ? "verbunden" : "nicht verbunden")
                   + String(format: " nach %.1f s", Date().timeIntervalSince(started))
                   + (generation != self.joinGeneration ? " (überholt)" : ""))
             RunLoop.main.perform(inModes: [.common]) {
@@ -1399,7 +1399,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
 
     @objc func openOverview() {
         overview.reload()
-        show(&overviewWindow, title: L("Datenmonitor – Übersicht", "Datenmonitor – Overview"),
+        show(&overviewWindow, title: L("Wifi Usage – Übersicht", "Wifi Usage – Overview"),
              size: NSSize(width: 640, height: 760), resizable: true) { OverviewView(model: overview) }
     }
 
@@ -2499,8 +2499,8 @@ struct SettingsView: View {
             } header: {
                 Text(L("Berechtigungen", "Permissions"))
             } footer: {
-                Text(L("Die Ortungsdienste braucht macOS nur, um den WLAN-Namen herauszugeben – der Standort wird nie abgefragt. Datenmonitor liest nur die Netzwerkzähler des Systems und seinen eigenen Datenordner, daher ist kein Festplattenvollzugriff nötig.",
-                       "macOS only reveals the Wi-Fi name to apps with Location Services – your location is never requested. Datenmonitor only reads the system's network counters and its own data folder, so no Full Disk Access is needed."))
+                Text(L("Die Ortungsdienste braucht macOS nur, um den WLAN-Namen herauszugeben – der Standort wird nie abgefragt. Wifi Usage liest nur die Netzwerkzähler des Systems und seinen eigenen Datenordner, daher ist kein Festplattenvollzugriff nötig.",
+                       "macOS only reveals the Wi-Fi name to apps with Location Services – your location is never requested. Wifi Usage only reads the system's network counters and its own data folder, so no Full Disk Access is needed."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -2581,7 +2581,7 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     CoffeeIcon(size: 36)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L("Gefällt dir Datenmonitor?", "Enjoying Datenmonitor?")).fontWeight(.semibold)
+                        Text(L("Gefällt dir Wifi Usage?", "Enjoying Wifi Usage?")).fontWeight(.semibold)
                         Text(L("Spendier mir einen Kaffee ☕", "Buy me a coffee ☕"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -2592,9 +2592,9 @@ struct SettingsView: View {
 
             Section {
                 HStack {
-                    Text("Datenmonitor \(APP_VERSION)").foregroundStyle(.secondary)
+                    Text("Wifi Usage \(APP_VERSION)").foregroundStyle(.secondary)
                     Spacer()
-                    Button(L("Datenmonitor beenden", "Quit Datenmonitor")) { NSApp.terminate(nil) }
+                    Button(L("Wifi Usage beenden", "Quit Wifi Usage")) { NSApp.terminate(nil) }
                 }
             }
         }
@@ -2655,10 +2655,10 @@ struct CoffeeView: View {
     var body: some View {
         VStack(spacing: 14) {
             CoffeeIcon(size: 64).padding(.top, 8)
-            Text(L("Gefällt dir Datenmonitor?", "Enjoying Datenmonitor?"))
+            Text(L("Gefällt dir Wifi Usage?", "Enjoying Wifi Usage?"))
                 .font(.title2.bold())
-            Text(L("Datenmonitor ist kostenlos, ohne Werbung und ohne Tracking. Wenn es dir hilft, freue ich mich über einen Kaffee.",
-                   "Datenmonitor is free, with no ads and no tracking. If it helps you, I'd be happy about a coffee."))
+            Text(L("Wifi Usage ist kostenlos, ohne Werbung und ohne Tracking. Wenn es dir hilft, freue ich mich über einen Kaffee.",
+                   "Wifi Usage is free, with no ads and no tracking. If it helps you, I'd be happy about a coffee."))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

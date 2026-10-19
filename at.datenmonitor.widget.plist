@@ -9,7 +9,7 @@
     <!-- Das Widget in der .app (nötig für die Ortungsdienste-Freigabe). __HOME__ wird beim Installieren ersetzt. -->
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/Applications/Datenmonitor.app/Contents/MacOS/datenmonitor-widget</string>
+        <string>__HOME__/Applications/Wifi Usage.app/Contents/MacOS/wifi-usage</string>
     </array>
 
     <!-- Nach dem Login automatisch starten und am Leben halten -->

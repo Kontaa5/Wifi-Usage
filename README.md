@@ -1,4 +1,4 @@
-# Datenmonitor-Widget für macOS
+# Wifi Usage für macOS
 
 Ein winziges Menüleisten-Widget im **Stats-Stil**: oben dünn der **echte WLAN-Name**, darunter
 der Datenverbrauch (GB) dieses Netzes im laufenden Monat. Ein Klick zeigt den Verbrauch des
@@ -42,14 +42,18 @@ Darstellung, Berechtigungen). Braucht **keinen Festplattenvollzugriff**.
 
 ## Technik
 
-Ein einziges Swift-File, kompiliert mit Apples `swiftc` zu einer kleinen `Datenmonitor.app`. Keine Fremdsoftware, kein
+Ein einziges Swift-File, kompiliert mit Apples `swiftc` zu einer kleinen `Wifi Usage.app`. Keine Fremdsoftware, kein
 SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 `~/Library/Application Support/Datenmonitor/usage.json`.
 
+> Bis Version 2.3 hieß die App „Datenmonitor“. Interne Kennungen heißen weiterhin so
+> (Bundle-ID `at.datenmonitor.widget`, Datenordner `~/Library/Application Support/Datenmonitor`),
+> damit Ortungsfreigabe, gespeicherte WLAN-Passwörter und der Verbrauchsverlauf erhalten bleiben.
+
 ## Dateien
 
-- `DatenmonitorWidget.swift` — kompletter Quellcode (Widget **und** Tracker in einem)
-- `install-widget.sh` — baut **einmal** die `Datenmonitor.app` und richtet den Autostart ein
+- `WifiUsage.swift` — kompletter Quellcode (Widget **und** Tracker in einem)
+- `install-widget.sh` — baut **einmal** die `Wifi Usage.app` und richtet den Autostart ein
 - `at.datenmonitor.widget.plist` — launchd-Vorlage (Autostart nach Login)
 - `AppIcon.icns` — App-Icon (Apples WLAN-Symbol in Blau, transparenter Hintergrund)
 
@@ -62,7 +66,7 @@ chmod +x install-widget.sh
 ./install-widget.sh
 ```
 
-Das baut `~/Applications/Datenmonitor.app` (ad-hoc signiert), lädt den launchd-Agent
+Das baut `~/Applications/Wifi Usage.app` (ad-hoc signiert), lädt den launchd-Agent
 und startet das Widget. **Beim ersten Start fragt macOS nach den Ortungsdiensten — bitte
 erlauben**, sonst gibt macOS den WLAN-Namen nicht heraus (siehe unten). Es erscheint oben rechts in der Menüleiste und startet künftig
 automatisch nach dem Login — **ohne erneutes Kompilieren**. `swiftc` läuft nur beim
@@ -76,7 +80,7 @@ xcode-select --install
 
 ## Update (neuer Code)
 
-Neuen Code in `DatenmonitorWidget.swift` einfügen, dann `./install-widget.sh`. Das Skript
+Neuen Code in `WifiUsage.swift` einfügen, dann `./install-widget.sh`. Das Skript
 entlädt die laufende Version selbst und startet die neue. Die App wird mit einer festen
 Anforderung (nur Bundle-ID) signiert, daher bleibt die Ortungsdienste-Freigabe über Neubauten
 erhalten. (Vor Version 2.2 ging sie bei jedem Neubau verloren — dann fehlte der WLAN-Name und
@@ -116,24 +120,24 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
   gespeicherte Netze in Reichweite oder „Keine weiteren Netzwerke" (frische Netzsuche;
   kurz nicht gefundene Netze bleiben 30 Sekunden stehen, damit schwache Netze nicht flackern), per Klick auf- und
   zuklappbar (das Menü bleibt dabei offen). Klick auf ein Netz verbindet; bei geschützten
-  Netzen fragt Datenmonitor nach dem Passwort und verbindet über CoreWLAN.
+  Netzen fragt Wifi Usage nach dem Passwort und verbindet über CoreWLAN.
 - Klick auf ein Netz verbindet, Klick auf das verbundene öffnet die Übersicht. Beim Wechseln
   und beim Ein-/Ausschalten bleibt das Menü offen: Im Symbolkreis des Netzes dreht sich ein
   Warte-Kreis, in der Menüleiste laufen die WLAN-Balken (wie bei Apple), danach rückt der
   blaue Kreis um.
-- **Bekannte Netze verbinden:** Datenmonitor nutzt dieselbe interne Schnittstelle wie Apples
+- **Bekannte Netze verbinden:** Wifi Usage nutzt dieselbe interne Schnittstelle wie Apples
   WLAN-Menü (CoreWiFi) und verbindet über das gespeicherte Netzprofil, meist in unter einer
   Sekunde.
   - **Offene Netze** (z. B. Café-WLAN): ganz ohne Abfrage.
   - **Geschützte Netze** (WPA, z. B. A1, Gast, iPhone-Hotspot): Beim ersten Wechsel fragt
-    Datenmonitor einmal nach dem **WLAN-Passwort** (nicht dem Mac-Passwort). Mit „Passwort merken"
+    Wifi Usage einmal nach dem **WLAN-Passwort** (nicht dem Mac-Passwort). Mit „Passwort merken"
     wird es als eigener Eintrag in deinem **Anmelde-Schlüsselbund** gespeichert — verschlüsselt,
-    ohne Rückfrage lesbar nur für Datenmonitor, nie in Dateien, Log oder Befehlszeilen, und erst
+    ohne Rückfrage lesbar nur für Wifi Usage, nie in Dateien, Log oder Befehlszeilen, und erst
     nachdem die Verbindung damit geklappt hat. Danach wechselt ein Klick ohne Abfrage (über die
     öffentliche CoreWLAN-Schnittstelle). Hat sich das Passwort geändert, steht „Passwort prüfen –
     nochmal klicken"; das alte wird erst ersetzt, wenn das neue funktioniert. Verwalten und
     löschen: Einstellungen › Gespeicherte WLAN-Passwörter.
-  - **Was ein Netz verlangt, erkennt Datenmonitor selbst** — der Reihe nach aus der aktuellen
+  - **Was ein Netz verlangt, erkennt Wifi Usage selbst** — der Reihe nach aus der aktuellen
     Suchliste, dem System-Zwischenspeicher, dem von macOS gespeicherten Profil und zuletzt einer
     gezielten Suche: offen oder OWE („Enhanced Open", verschlüsselt ohne Passwort) → keine
     Abfrage; WPA/WPA2/WPA3-Personal → nur Passwort; Enterprise → Benutzername + Passwort.
@@ -147,12 +151,12 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
   - **Die Abfrage selbst ist bewusst kurz** („Passwort eingeben.“ bzw. „Benutzername und
     Passwort eingeben.“, dazu „merken“). Was beim Merken passiert: Die Zugangsdaten landen
     verschlüsselt in deinem Anmelde-Schlüsselbund, ohne Rückfrage lesen kann sie nur
-    Datenmonitor, und gespeichert wird erst, wenn die Verbindung damit geklappt hat.
-    Alle Zugangsdaten liegen zusammen in **einem** Eintrag („Datenmonitor – WLAN-Zugangsdaten“).
+    Wifi Usage, und gespeichert wird erst, wenn die Verbindung damit geklappt hat.
+    Alle Zugangsdaten liegen zusammen in **einem** Eintrag („Wifi Usage – WLAN-Zugangsdaten“).
     Der Schlüsselbund bindet die Freigabe an genau diese Programmversion: Nach einem Update fragt
     macOS **einmal** nach (nicht pro Netz) — Mac-Passwort eingeben, „Immer erlauben“ wählen.
-    Danach liest Datenmonitor den Eintrag einmal und arbeitet aus dem Speicher. Lehnst du die
-    Abfrage ab, fragt Datenmonitor bis zum nächsten Start (oder bis du die Einstellungen öffnest)
+    Danach liest Wifi Usage den Eintrag einmal und arbeitet aus dem Speicher. Lehnst du die
+    Abfrage ab, fragt Wifi Usage bis zum nächsten Start (oder bis du die Einstellungen öffnest)
     nicht erneut — es gibt keine Abfrage-Schleife. Prüfung und Schlüsselbund laufen im
     Hintergrund, das Menü friert dabei nicht ein. Einzeleinträge
     älterer Versionen (bis 2.2) werden beim ersten Zugriff übernommen und gelöscht.
@@ -205,7 +209,7 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
 - **Berechtigungen:** Status der Ortungsdienste (mit Knopf zum Erlauben). Festplattenvollzugriff
   ist **nicht nötig**: Das Widget liest nur die Netzwerkzähler des Systems (`netstat`, `arp`,
   `networksetup`) und seinen eigenen Ordner unter `Application Support`.
-- **Gespeicherte WLAN-Passwörter:** alle Netze, deren Zugangsdaten in Datenmonitor gespeichert
+- **Gespeicherte WLAN-Passwörter:** alle Netze, deren Zugangsdaten in Wifi Usage gespeichert
   sind — Passwort und ggf. Benutzername zunächst verdeckt. Jedes Netz hat ein **Auge zum Ein-
   und Ausblenden**. Das erste Einblenden fragt nach **Touch ID** (ersatzweise Mac-Passwort) und
   entsperrt für **60 Sekunden**: In der Zeit lassen sich beliebige Netze ohne neue Abfrage ein-
@@ -214,7 +218,7 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
   60 Sekunden wieder. Einzelne Einträge lassen sich löschen. (Passwörter, die nur Apple
   gespeichert hat: Systemeinstellungen › WLAN › Netz › „Passwort kopieren“.)
 - **Daten:** Datenordner im Finder zeigen.
-- **Unterstützen:** Buy-Me-a-Coffee-Knopf, dazu Version und „Datenmonitor beenden".
+- **Unterstützen:** Buy-Me-a-Coffee-Knopf, dazu Version und „Wifi Usage beenden".
 
 Beim allerersten Start erscheint einmal ein kleines **Buy-Me-a-Coffee-Fenster**
 („Vielleicht später" oder Fenster schließen genügt; danach nur noch in den Einstellungen).
@@ -273,12 +277,12 @@ In `render`:
 1. Auf [buymeacoffee.com](https://buymeacoffee.com) „Start my page" wählen und registrieren
    (E-Mail oder Google). Dabei einen **Benutzernamen** festlegen — deine Seite heißt dann
    `https://buymeacoffee.com/<benutzername>`.
-2. Seite kurz ausfüllen: Profilbild, ein Satz zu Datenmonitor, Preis pro Kaffee (z. B. 3 €).
+2. Seite kurz ausfüllen: Profilbild, ein Satz zu Wifi Usage, Preis pro Kaffee (z. B. 3 €).
 3. **Auszahlung verbinden** (in deinem BMC-Dashboard unter den Auszahlungs-/Payout-Einstellungen,
    über Stripe Express). **Ohne verbundene Auszahlung ist die Seite versteckt** — Besucher sehen
    nur „Follow", aber keinen Bezahlknopf. Erst sammeln und später verbinden geht also nicht. Buy Me a Coffee
    behält laut eigener Angabe eine kleine Gebühr (rund 5 %) plus Zahlungsgebühren ein.
-4. In `DatenmonitorWidget.swift` ganz oben den Link eintragen:
+4. In `WifiUsage.swift` ganz oben den Link eintragen:
 
    ```swift
    let COFFEE_URL = "https://buymeacoffee.com/deinname"
@@ -327,7 +331,7 @@ für die Kontrolle ausgehender Verbindungen zuständig, das Widget zeigt den Ver
 
 ```bash
 launchctl bootout gui/$(id -u)/at.datenmonitor.widget
-rm -rf ~/Applications/Datenmonitor.app
+rm -rf ~/Applications/Wifi\ Usage.app
 rm ~/Library/LaunchAgents/at.datenmonitor.widget.plist
 rm -rf ~/Library/Application\ Support/Datenmonitor   # optional: Daten löschen
 ```

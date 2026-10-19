@@ -1,18 +1,19 @@
 #!/bin/bash
 #
-# install-widget.sh — Kompiliert und installiert das Datenmonitor-Menüleisten-Widget.
+# install-widget.sh — Kompiliert und installiert das Wifi-Usage-Menüleisten-Widget.
 # Nur Apple-Bordmittel (swiftc aus den Xcode Command Line Tools). Keine Fremdpakete.
 #
 set -eu
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP="$HOME/Applications/Datenmonitor.app"
+APP="$HOME/Applications/Wifi Usage.app"
+OLD_APP="$HOME/Applications/Datenmonitor.app"   # Name bis 2.3
 AGENT_DIR="$HOME/Library/LaunchAgents"
 SUPPORT_DIR="$HOME/Library/Application Support/Datenmonitor"
 PLIST="at.datenmonitor.widget.plist"
-BIN="datenmonitor-widget"
+BIN="wifi-usage"
 
-echo "== Datenmonitor-Widget: Installation =="
+echo "== Wifi Usage: Installation =="
 
 # 0. Swift-Compiler vorhanden?
 if ! command -v swiftc >/dev/null 2>&1; then
@@ -27,7 +28,7 @@ fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$SUPPORT_DIR"
 cp "$SRC_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"   # App-Icon: WLAN-Symbol, transparent
 echo "Kompiliere ..."
-swiftc -O -o "$APP/Contents/MacOS/$BIN" "$SRC_DIR/DatenmonitorWidget.swift" \
+swiftc -O -o "$APP/Contents/MacOS/$BIN" "$SRC_DIR/WifiUsage.swift" \
   -framework AppKit -framework SwiftUI -framework Charts -framework CoreWLAN -framework CoreLocation
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -35,12 +36,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>           <string>at.datenmonitor.widget</string>
-    <key>CFBundleName</key>                 <string>Datenmonitor</string>
-    <key>CFBundleExecutable</key>           <string>datenmonitor-widget</string>
+    <key>CFBundleName</key>                 <string>Wifi Usage</string>
+    <key>CFBundleDisplayName</key>          <string>Wifi Usage</string>
+    <key>CFBundleExecutable</key>           <string>wifi-usage</string>
     <key>CFBundleIconFile</key>             <string>AppIcon</string>
     <key>CFBundlePackageType</key>          <string>APPL</string>
-    <key>CFBundleShortVersionString</key>   <string>2.3</string>
-    <key>CFBundleVersion</key>              <string>5</string>
+    <key>CFBundleShortVersionString</key>   <string>2.4</string>
+    <key>CFBundleVersion</key>              <string>6</string>
     <key>LSMinimumSystemVersion</key>       <string>13.0</string>
     <key>LSUIElement</key>                  <true/>
     <key>NSLocationUsageDescription</key>
@@ -57,8 +59,9 @@ PLIST
 codesign --force --sign - --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
 echo "Installiert: $APP"
 
-# Alte Version (ohne .app) aufräumen
-rm -f "$HOME/.local/bin/$BIN"
+# Alte Versionen aufräumen (ohne .app bzw. unter dem alten Namen „Datenmonitor")
+rm -f "$HOME/.local/bin/datenmonitor-widget"
+rm -rf "$OLD_APP"
 
 # 2. launchd-Agent mit echtem Home-Pfad
 mkdir -p "$AGENT_DIR"
@@ -78,6 +81,6 @@ echo "Fertig. Das Widget erscheint jetzt oben rechts in der Menüleiste."
 echo ""
 echo "Beim ersten Start fragt macOS nach den Ortungsdiensten: bitte erlauben,"
 echo "sonst bleibt der echte WLAN-Name verborgen. Nachträglich unter"
-echo "Systemeinstellungen → Datenschutz & Sicherheit → Ortungsdienste → Datenmonitor."
+echo "Systemeinstellungen → Datenschutz & Sicherheit → Ortungsdienste → Wifi Usage."
 echo ""
 echo "Beenden/entfernen:  launchctl bootout gui/$(id -u)/at.datenmonitor.widget"
