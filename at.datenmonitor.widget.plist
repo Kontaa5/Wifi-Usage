@@ -6,10 +6,10 @@
     <key>Label</key>
     <string>at.datenmonitor.widget</string>
 
-    <!-- Das kompilierte Widget. __HOME__ wird beim Installieren ersetzt. -->
+    <!-- Das Widget in der .app (nötig für die Ortungsdienste-Freigabe). __HOME__ wird beim Installieren ersetzt. -->
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.local/bin/datenmonitor-widget</string>
+        <string>__HOME__/Applications/Datenmonitor.app/Contents/MacOS/datenmonitor-widget</string>
     </array>
 
     <!-- Nach dem Login automatisch starten und am Leben halten -->
