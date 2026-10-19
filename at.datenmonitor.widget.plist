@@ -12,11 +12,14 @@
         <string>__HOME__/Applications/Wifi Usage.app/Contents/MacOS/wifi-usage</string>
     </array>
 
-    <!-- Nach dem Login automatisch starten und am Leben halten -->
+    <!-- Nach dem Login automatisch starten; nach Absturz neu starten, „Beenden" respektieren -->
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>ThrottleInterval</key>
     <integer>10</integer>
 

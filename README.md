@@ -53,13 +53,33 @@ SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 ## Dateien
 
 - `WifiUsage.swift` — kompletter Quellcode (Widget **und** Tracker in einem)
+- `build-app.sh` — baut die `Wifi Usage.app` (genutzt vom Install-Skript und von Homebrew)
 - `install-widget.sh` — baut **einmal** die `Wifi Usage.app` und richtet den Autostart ein
 - `at.datenmonitor.widget.plist` — launchd-Vorlage (Autostart nach Login)
 - `AppIcon.icns` — App-Icon (Apples WLAN-Symbol in Blau, transparenter Hintergrund)
 
 ## Installation
 
-Alle drei Dateien in denselben Ordner legen, dann im Terminal:
+### Mit Homebrew
+
+```bash
+brew tap kontaa5/tap
+brew install wifi-usage
+```
+
+Danach einmal starten — die App richtet ihren Autostart selbst ein (abschaltbar in den
+Einstellungen: „Bei Anmeldung starten“):
+
+```bash
+wifi-usage
+```
+
+Update: `brew upgrade wifi-usage`, danach neu starten mit
+`launchctl kickstart -k gui/$(id -u)/at.datenmonitor.widget` (oder ab- und wieder anmelden).
+
+### Aus dem Quellcode
+
+Den Ordner herunterladen, dann im Terminal:
 
 ```bash
 chmod +x install-widget.sh

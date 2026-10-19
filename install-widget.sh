@@ -11,51 +11,12 @@ OLD_APP="$HOME/Applications/Datenmonitor.app"   # Name bis 2.3
 AGENT_DIR="$HOME/Library/LaunchAgents"
 SUPPORT_DIR="$HOME/Library/Application Support/Datenmonitor"
 PLIST="at.datenmonitor.widget.plist"
-BIN="wifi-usage"
 
 echo "== Wifi Usage: Installation =="
 
-# 0. Swift-Compiler vorhanden?
-if ! command -v swiftc >/dev/null 2>&1; then
-  echo "Fehler: 'swiftc' fehlt. Bitte einmalig die Xcode Command Line Tools installieren:"
-  echo "    xcode-select --install"
-  echo "Danach dieses Skript erneut ausführen."
-  exit 1
-fi
-
-# 1. Als kleine .app bauen: nur eine App mit Bundle-ID darf Ortungsdienste nutzen,
-#    und ohne die gibt macOS den WLAN-Namen (SSID) nicht heraus.
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$SUPPORT_DIR"
-cp "$SRC_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"   # App-Icon: WLAN-Symbol, transparent
-echo "Kompiliere ..."
-swiftc -O -o "$APP/Contents/MacOS/$BIN" "$SRC_DIR/WifiUsage.swift" \
-  -framework AppKit -framework SwiftUI -framework Charts -framework CoreWLAN -framework CoreLocation
-cat > "$APP/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>           <string>at.datenmonitor.widget</string>
-    <key>CFBundleName</key>                 <string>Wifi Usage</string>
-    <key>CFBundleDisplayName</key>          <string>Wifi Usage</string>
-    <key>CFBundleExecutable</key>           <string>wifi-usage</string>
-    <key>CFBundleIconFile</key>             <string>AppIcon</string>
-    <key>CFBundlePackageType</key>          <string>APPL</string>
-    <key>CFBundleShortVersionString</key>   <string>2.6</string>
-    <key>CFBundleVersion</key>              <string>8</string>
-    <key>LSMinimumSystemVersion</key>       <string>13.0</string>
-    <key>LSUIElement</key>                  <true/>
-    <key>NSLocationUsageDescription</key>
-    <string>macOS gibt den Namen des WLANs nur mit Ortungsdienste-Freigabe heraus. Der Standort selbst wird nicht verwendet.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>macOS gibt den Namen des WLANs nur mit Ortungsdienste-Freigabe heraus. Der Standort selbst wird nicht verwendet.</string>
-</dict>
-</plist>
-PLIST
-# Ad-hoc-Signatur mit fester Anforderung (nur Bundle-ID): Die Ortungsdienste-Freigabe (= WLAN-Name)
-# bleibt so über Neubauten erhalten. Den eigenen Schlüsselbund-Eintrag bindet macOS dagegen an genau
-# diese Programmversion; Wifi Usage fragt dann nicht nach, sondern verbindet über Apples Profile.
-codesign --force --sign - --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
+# 1. App bauen (Compiler-Prüfung, Info.plist und Signatur stehen in build-app.sh)
+mkdir -p "$SUPPORT_DIR"
+"$SRC_DIR/build-app.sh" "$APP"
 echo "Installiert: $APP"
 
 # Alte Versionen aufräumen (ohne .app bzw. unter dem alten Namen „Datenmonitor")

@@ -125,6 +125,13 @@ final class Prefs: ObservableObject {
         didSet { UserDefaults.standard.set(language.rawValue, forKey: "language"); onChange?() }
     }
     @Published var locationGranted = false   // vom AppController gesetzt
+    /// Bei der Anmeldung automatisch starten (Standard: an).
+    @Published var launchAtLogin = UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(launchAtLogin, forKey: "launchAtLogin")
+            if launchAtLogin { Autostart.enable() } else { Autostart.disable() }
+        }
+    }
     /// Eigene iPhones/iPads (gleiche Apple-ID) immer im Menü, auch mit ausgeschaltetem Hotspot.
     @Published var instantHotspot = UserDefaults.standard.object(forKey: "instantHotspot") as? Bool ?? true {
         didSet { UserDefaults.standard.set(instantHotspot, forKey: "instantHotspot"); onChange?() }
@@ -869,6 +876,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         // Nie den macOS-Dialog „… möchte auf Schlüssel … zugreifen“: Ist der eigene Eintrag nicht
         // ohne Rückfrage lesbar (z. B. nach einem Neubau), gilt er still als nicht vorhanden.
         SavedPasswords.disableKeychainPrompts()
+        Autostart.setup()
         RemoteHotspot.shared.onChange = { [weak self] in if self?.openMenu != nil { self?.updatePanel() } }
         Prefs.shared.onChange = { [weak self] in self?.prefsChanged() }
         Actions.openSettings = { [weak self] in self?.openSettings() }
@@ -2635,6 +2643,7 @@ struct SettingsView: View {
                 Picker(L("Menüleiste", "Menu bar"), selection: $prefs.style) {
                     ForEach(BarStyle.allCases) { Text($0.title).tag($0) }
                 }
+                Toggle(L("Bei Anmeldung starten", "Launch at login"), isOn: $prefs.launchAtLogin)
                 Toggle(L("iPhone-Hotspot immer anzeigen", "Always show iPhone hotspot"), isOn: $prefs.instantHotspot)
             } header: {
                 Text(L("Allgemein", "General"))
@@ -2839,7 +2848,69 @@ struct CoffeeView: View {
     }
 }
 
+// MARK: - Autostart (eigener launchd-Agent, wie install-widget.sh ihn anlegt)
+/// Die App richtet ihren Autostart selbst ein — so klappt er auch nach `brew install`, wo die
+/// Installation nicht in ~/Library schreiben darf. Wirkt ab der nächsten Anmeldung.
+enum Autostart {
+    static let label = "at.datenmonitor.widget"
+    static var plistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+    static var isEnabled: Bool { FileManager.default.fileExists(atPath: plistURL.path) }
+
+    /// Pfad, der Updates überlebt: aus Homebrews versioniertem Cellar-Pfad wird der feste opt-Pfad.
+    static var executablePath: String {
+        let p = Bundle.main.executablePath ?? CommandLine.arguments[0]
+        guard let r = p.range(of: "/Cellar/wifi-usage/[^/]+/", options: .regularExpression) else { return p }
+        return p.replacingCharacters(in: r, with: "/opt/wifi-usage/")
+    }
+
+    /// Beim Start: Autostart einrichten, solange er gewünscht ist (Standard) und noch nicht auf
+    /// genau diese App zeigt.
+    static func setup() {
+        guard Prefs.shared.launchAtLogin else { return }
+        if (NSDictionary(contentsOf: plistURL)?["ProgramArguments"] as? [String])?.first != executablePath { enable() }
+    }
+
+    static func enable() {
+        let logs = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Datenmonitor").path
+        let plist: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [executablePath],
+            "RunAtLoad": true,
+            "KeepAlive": ["SuccessfulExit": false],   // nach Absturz neu starten, „Beenden" respektieren
+            "ThrottleInterval": 10,
+            "ProcessType": "Interactive",
+            "StandardOutPath": logs + "/widget.out.log",
+            "StandardErrorPath": logs + "/widget.err.log",
+        ]
+        do {
+            try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(atPath: logs, withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: plistURL, options: .atomic)
+            NSLog("Wifi Usage: Autostart eingerichtet (\(executablePath))")
+        } catch {
+            NSLog("Wifi Usage: Autostart nicht einrichtbar: \(error.localizedDescription)")
+        }
+    }
+
+    static func disable() {
+        try? FileManager.default.removeItem(at: plistURL)
+        NSLog("Wifi Usage: Autostart entfernt")
+    }
+}
+
 // MARK: - Start
+// Nur eine Instanz: läuft Wifi Usage schon (z. B. per Autostart), still beenden. Kurz warten,
+// falls die alte gerade beendet wird (Neuinstallation, Update).
+func otherInstanceRunning() -> Bool {
+    NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? Autostart.label)
+        .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated }
+}
+for _ in 0..<10 where otherInstanceRunning() { Thread.sleep(forTimeInterval: 0.5) }
+if otherInstanceRunning() { exit(0) }
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let controller = AppController()
