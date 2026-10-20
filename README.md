@@ -258,6 +258,11 @@ Alle 20 Sekunden liest das Widget die kumulativen Byte-Zähler der WLAN-Schnitts
 (`netstat -ibn`, Link-Layer-Zeile, IPv4+IPv6 zusammen), bildet die Differenz zur letzten
 Messung und schreibt sie dem aktuellen Netz im aktuellen Monat und Tag gut.
 
+**Umbenannte Netze:** Ändert sich der Name eines WLANs (z. B. iPhone umbenannt), erkennt das
+Widget das am gleichbleibenden Sender (BSSID) und führt die Statistik unter dem neuen Namen
+weiter — alte Daten inklusive. Ein Gast-WLAN am selben Router hat einen eigenen Sender und bleibt
+getrennt. Selbst umbenennen lässt sich ein Netz in Wifi Usage nicht.
+
 **Netz-Erkennung über den echten Namen:** Seit macOS 14.4 gibt das System den WLAN-Namen
 (SSID) nur an Apps mit Ortungsdienste-Zugriff heraus. Deshalb ist das Widget eine echte
 (kleine) App mit Bundle-ID und fragt einmal nach den Ortungsdiensten. Der Standort selbst

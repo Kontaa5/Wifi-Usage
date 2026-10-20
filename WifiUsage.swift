@@ -56,11 +56,36 @@ struct Store: Codable {
     var hotspots: [String] = []                   // SSIDs, die als Handy-Hotspot erkannt wurden
     var sharedMACs: [String] = []                 // Router mit mehreren WLANs (z. B. Haupt + Gast)
     var lastSeen: [String: Double] = [:]          // Netzname -> zuletzt verbunden (Unix-Zeit)
+    var bssids: [String: String] = [:]            // Sender-MAC (BSSID) -> zuletzt gesehene SSID
+    var renamed: [String: String] = [:]           // alter WLAN-Name -> neuer (Netz umbenannt)
 
     init() {}
 
+    /// Aktueller Name eines Netzes: folgt Umbenennungen (alt -> neu), Schleifen abgesichert.
+    func currentName(_ name: String) -> String {
+        var n = name, seen: Set<String> = [name]
+        while let next = renamed[n], seen.insert(next).inserted { n = next }
+        return n
+    }
+
+    /// SSID am Sender merken. Zeigt derselbe Sender (BSSID) plötzlich einen anderen Namen, wurde
+    /// das Netz umbenannt (z. B. iPhone-Name geändert): alte Statistik läuft unter dem neuen
+    /// Namen weiter. Ein zweites WLAN am selben Router (Gast) hat eine eigene BSSID.
+    mutating func learn(ssid: String, bssid: String) {
+        let b = bssid.lowercased()
+        guard let old = bssids[b], old != ssid, currentName(old) != ssid else { bssids[b] = ssid; return }
+        bssids[b] = ssid
+        let from = currentName(old)
+        renamed[from] = ssid
+        renamed[ssid] = nil   // zurückbenannt: keine Schleife
+        for (k, v) in renamed where v == from { renamed[k] = ssid }
+        for (m, v) in ssids where v == from { ssids[m] = ssid }   // nur per Router-MAC gezählte Altdaten
+        if hotspots.contains(from), !hotspots.contains(ssid) { hotspots.append(ssid) }
+        if let t = lastSeen.removeValue(forKey: from) { lastSeen[ssid] = max(t, lastSeen[ssid] ?? 0) }
+    }
+
     // Tolerantes Einlesen: fehlende Felder -> Standardwert (kein Datenverlust bei Updates).
-    enum CodingKeys: String, CodingKey { case lastDown, lastUp, months, days, names, ssids, hotspots, sharedMACs, lastSeen }
+    enum CodingKeys: String, CodingKey { case lastDown, lastUp, months, days, names, ssids, hotspots, sharedMACs, lastSeen, bssids, renamed }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         lastDown = try c.decodeIfPresent(UInt64.self, forKey: .lastDown)
@@ -72,6 +97,8 @@ struct Store: Codable {
         hotspots = try c.decodeIfPresent([String].self, forKey: .hotspots) ?? []
         sharedMACs = try c.decodeIfPresent([String].self, forKey: .sharedMACs) ?? []
         lastSeen = try c.decodeIfPresent([String: Double].self, forKey: .lastSeen) ?? [:]
+        bssids   = try c.decodeIfPresent([String: String].self, forKey: .bssids) ?? [:]
+        renamed  = try c.decodeIfPresent([String: String].self, forKey: .renamed) ?? [:]
     }
 }
 
@@ -653,6 +680,7 @@ enum NetID {
 
         let store = Storage.shared
         if let ssid = ssid {
+            if let b = Wifi.iface?.bssid(), !b.isEmpty { store.store.learn(ssid: ssid, bssid: b) }
             if let m = mac {
                 // MAC -> SSID lernen, nur einmal (alte, nur per MAC gezählte Daten wandern sonst mit).
                 // Zweites WLAN am selben Router (Haupt + Gast): Router als „geteilt" merken.
@@ -732,9 +760,9 @@ enum Meter {
 
     /// Anzeigename eines Schlüssels: echte SSID > gelernte SSID der Router-MAC > Ersatzname.
     static func displayName(for key: String) -> String {
-        if key.hasPrefix(SSID_PREFIX) { return String(key.dropFirst(SSID_PREFIX.count)) }
         let st = Storage.shared.store
-        if let ssid = st.ssids[key] { return ssid }
+        if key.hasPrefix(SSID_PREFIX) { return st.currentName(String(key.dropFirst(SSID_PREFIX.count))) }
+        if let ssid = st.ssids[key] { return st.currentName(ssid) }
         if key == UNKNOWN_KEY || key == "wlan" { return unknownName }
         let n = st.names[key] ?? key
         return n == "WLAN" ? unknownName : n
