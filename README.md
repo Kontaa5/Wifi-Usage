@@ -65,8 +65,11 @@ SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 
 ```bash
 brew tap kontaa5/wifi-usage https://github.com/Kontaa5/Wifi-Usage
-brew install wifi-usage
+brew install kontaa5/wifi-usage/wifi-usage
 ```
+
+(Der volle Name im zweiten Befehl ist nötig: Homebrew lädt Formeln aus fremden Taps nur,
+wenn man sie so ausdrücklich angibt.)
 
 Danach einmal starten — die App richtet ihren Autostart selbst ein (abschaltbar in den
 Einstellungen: „Bei Anmeldung starten“):
@@ -75,7 +78,7 @@ Einstellungen: „Bei Anmeldung starten“):
 wifi-usage
 ```
 
-Update: `brew upgrade wifi-usage`, danach neu starten mit
+Update: `brew upgrade kontaa5/wifi-usage/wifi-usage`, danach neu starten mit
 `launchctl kickstart -k gui/$(id -u)/at.datenmonitor.widget` (oder ab- und wieder anmelden).
 
 ### Aus dem Quellcode
