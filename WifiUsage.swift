@@ -312,8 +312,8 @@ enum Wifi {
 /// dafür das Passwort, networksetup scheitert seit macOS 14. Privat und undokumentiert: Ändert
 /// Apple sie, liefert joinKnown einen Fehler und das Menü zeigt „Fehlgeschlagen".
 enum CoreWiFi {
-    private typealias ObjFn = @convention(c) (AnyObject, Selector, AnyObject, UnsafeMutablePointer<NSError?>?) -> AnyObject?
-    private typealias BoolFn = @convention(c) (AnyObject, Selector, AnyObject, UnsafeMutablePointer<NSError?>?) -> Bool
+    private typealias ObjFn = @convention(c) (AnyObject, Selector, AnyObject, AutoreleasingUnsafeMutablePointer<NSError?>?) -> AnyObject?
+    private typealias BoolFn = @convention(c) (AnyObject, Selector, AnyObject, AutoreleasingUnsafeMutablePointer<NSError?>?) -> Bool
     private typealias SetBoolFn = @convention(c) (AnyObject, Selector, Bool) -> Void
 
     private static let loaded = dlopen("/System/Library/PrivateFrameworks/CoreWiFi.framework/CoreWiFi", RTLD_NOW) != nil
@@ -1295,14 +1295,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                     let found = try iface.scanForNetworks(withName: ssid, includeHidden: true)
                     if let n = found.max(by: { $0.rssiValue < $1.rssiValue }) {
                         NSLog("Wifi Usage: Hotspot \(ssid) nach \(tries) Suchen gefunden")
-                        if known, CoreWiFi.joinKnown(ssid) == nil { return nil }
+                        if known {
+                            let failure = CoreWiFi.joinKnown(ssid)
+                            if failure == nil { return nil }
+                            NSLog("Wifi Usage: Profil für \(ssid) abgelehnt (\(failure!)), versuche mit Passwort vom iPhone")
+                        }
                         do { try iface.associate(to: n, password: reply?.password); return nil }
                         catch { return error.localizedDescription }
                     }
+                    Thread.sleep(forTimeInterval: 0.3)   // noch nicht da: gleich nochmal
                 } catch {
                     NSLog("Wifi Usage: Suche nach \(ssid): \(error.localizedDescription)")
+                    Thread.sleep(forTimeInterval: 1)   // WLAN-Chip belegt
                 }
-                Thread.sleep(forTimeInterval: 1)
             }
             return "Netz nicht in Reichweite"
         }, retry: known ? { CoreWiFi.joinKnown(ssid, freshScan: true) } : nil)
