@@ -1214,7 +1214,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
 
     // Netzsuche im Hintergrund (liefert SSIDs nur mit Ortungsdienste-Freigabe).
     func scanAsync(retries: Int = 0) {
-        guard !scanning, locationGranted, let iface = Wifi.iface, iface.powerOn() else { return }
+        // nicht während eines Wechsels: die Suche blockiert sonst den WLAN-Chip für den Wechsel
+        guard !scanning, joining == nil, locationGranted, let iface = Wifi.iface, iface.powerOn() else { return }
         scanning = true
         if openMenu != nil { updatePanel() }   // Warte-Kreis „sucht" oben im Menü
         DispatchQueue.global(qos: .utility).async {
@@ -1283,12 +1284,25 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             let reply = RemoteHotspot.enable(phone.object)
             NSLog("Wifi Usage: Hotspot \(ssid) " + (reply == nil ? "nicht geweckt" : "geweckt"))
             guard let iface = Wifi.iface else { return "WLAN nicht verfügbar" }
-            for _ in 0..<6 {   // je Suche 2–4 s
-                guard let n = (try? iface.scanForNetworks(withName: ssid, includeHidden: true))?
-                        .max(by: { $0.rssiValue < $1.rssiValue }) else { continue }
-                if known { return CoreWiFi.joinKnown(ssid) }
-                do { try iface.associate(to: n, password: reply?.password); return nil }
-                catch { return error.localizedDescription }
+            // Bis zu 25 s gezielt suchen. Eine Suche scheitert sofort, solange der WLAN-Chip noch
+            // mit einer anderen beschäftigt ist (z. B. der Menü-Suche) — dann kurz warten.
+            let started = Date()
+            var tries = 0
+            while Date().timeIntervalSince(started) < 25 {
+                if Wifi.iface?.ssid() == ssid { return nil }   // macOS hat schon selbst verbunden
+                tries += 1
+                do {
+                    let found = try iface.scanForNetworks(withName: ssid, includeHidden: true)
+                    if let n = found.max(by: { $0.rssiValue < $1.rssiValue }) {
+                        NSLog("Wifi Usage: Hotspot \(ssid) nach \(tries) Suchen gefunden")
+                        if known, CoreWiFi.joinKnown(ssid) == nil { return nil }
+                        do { try iface.associate(to: n, password: reply?.password); return nil }
+                        catch { return error.localizedDescription }
+                    }
+                } catch {
+                    NSLog("Wifi Usage: Suche nach \(ssid): \(error.localizedDescription)")
+                }
+                Thread.sleep(forTimeInterval: 1)
             }
             return "Netz nicht in Reichweite"
         }, retry: known ? { CoreWiFi.joinKnown(ssid, freshScan: true) } : nil)
