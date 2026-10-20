@@ -54,6 +54,7 @@ SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 
 - `WifiUsage.swift` — kompletter Quellcode (Widget **und** Tracker in einem)
 - `build-app.sh` — baut die `Wifi Usage.app` (genutzt vom Install-Skript und von Homebrew)
+- `Formula/wifi-usage.rb` — Homebrew-Formel (dieses Repo ist zugleich der Tap)
 - `install-widget.sh` — baut **einmal** die `Wifi Usage.app` und richtet den Autostart ein
 - `at.datenmonitor.widget.plist` — launchd-Vorlage (Autostart nach Login)
 - `AppIcon.icns` — App-Icon (Apples WLAN-Symbol in Blau, transparenter Hintergrund)
@@ -63,7 +64,7 @@ SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 ### Mit Homebrew
 
 ```bash
-brew tap kontaa5/tap
+brew tap kontaa5/wifi-usage https://github.com/Kontaa5/Wifi-Usage
 brew install wifi-usage
 ```
 
