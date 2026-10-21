@@ -260,6 +260,8 @@ enum Sys {
 
     /// Router-MAC über ARP (stabile Netz-Identität, keine Berechtigung nötig).
     static func routerMAC(_ gw: String) -> String? {
+        // nur echte IPv4-Adressen an arp geben (Gateway kommt vom DHCP des WLANs)
+        guard gw.range(of: #"^\d{1,3}(\.\d{1,3}){3}$"#, options: .regularExpression) != nil else { return nil }
         let out = run("/usr/sbin/arp", ["-n", gw])
         // Beispiel: "? (172.20.10.1) at 8e:12:aa:bb:cc:dd on en0 ifscope [ethernet]"
         guard let r = out.range(of: " at ") else { return nil }

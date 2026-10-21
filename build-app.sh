@@ -7,8 +7,8 @@
 #
 set -eu
 
-VERSION="2.8"
-BUILD="12"
+VERSION="2.8.1"
+BUILD="13"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="${1:?Ziel angeben, z. B. ./build-app.sh \"\$HOME/Applications/Wifi Usage.app\"}"
@@ -52,6 +52,7 @@ PLIST
 # Ad-hoc-Signatur mit fester Anforderung (nur Bundle-ID): Die Ortungsdienste-Freigabe (= WLAN-Name)
 # bleibt so über Neubauten und Updates erhalten. Den eigenen Schlüsselbund-Eintrag bindet macOS
 # dagegen an genau diese Programmversion; Wifi Usage fragt dann nicht nach, sondern verbindet über
-# Apples Profile.
-codesign --force --sign - --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
+# Apples Profile. Hardened Runtime: verhindert, dass fremder Code in die App eingeschleust wird
+# (DYLD_INSERT_LIBRARIES) und so ohne Rückfrage auf ihren Schlüsselbund-Eintrag zugreift.
+codesign --force --sign - --options runtime --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
 echo "Gebaut: $APP (Version $VERSION)"

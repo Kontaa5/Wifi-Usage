@@ -361,3 +361,14 @@ rm -rf ~/Applications/Wifi\ Usage.app
 rm ~/Library/LaunchAgents/at.datenmonitor.widget.plist
 rm -rf ~/Library/Application\ Support/Datenmonitor   # optional: Daten löschen
 ```
+
+## Lizenz
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md) — © 2026 Gabriel Suntinger.
+
+- **Erlaubt:** Code ansehen, selbst verwenden, verändern, verbessern und weitergeben —
+  privat, zum Lernen, in Schule, Uni oder gemeinnützigen Organisationen.
+- **Nicht erlaubt:** Wifi Usage oder veränderte Versionen verkaufen oder sonst kommerziell nutzen.
+- Weitergaben müssen den Lizenztext und den Copyright-Hinweis enthalten.
+
+Unterstützen geht über [Buy Me a Coffee](https://buymeacoffee.com/suntinger).
