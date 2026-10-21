@@ -1,9 +1,10 @@
 class WifiUsage < Formula
   desc "Menu bar Wi-Fi usage per network, network switcher and iPhone hotspot wake-up"
   homepage "https://github.com/Kontaa5/Wifi-Usage"
+  license "PolyForm-Noncommercial-1.0.0"
   url "https://github.com/Kontaa5/Wifi-Usage.git",
-      tag:      "v2.8",
-      revision: "e1e3257aa243b1e4da03e6dffe2ee588ae0aefb7"
+      tag:      "v2.8.1",
+      revision: "86ff17f60af6596223eaf6910a75e3490adb282e"
 
   depends_on :macos
 
