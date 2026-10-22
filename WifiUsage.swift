@@ -25,7 +25,6 @@ import Charts
 import CoreLocation
 import CoreWLAN
 import Foundation
-import LocalAuthentication
 import Network
 import SwiftUI
 
@@ -496,153 +495,13 @@ final class RemoteHotspot: NSObject {
     }
 }
 
-// MARK: - Gespeicherte WLAN-Passwörter (eigener, verschlüsselter Schlüsselbund-Eintrag)
-/// Zugangsdaten eines WLANs: Passwort, bei Enterprise-Netzen (802.1X) zusätzlich Benutzername.
-struct WifiCredentials: Codable {
+// MARK: - WLAN-Zugangsdaten
+/// Zugangsdaten aus dem Anmelde-Dialog: Passwort, bei Enterprise-Netzen (802.1X) zusätzlich
+/// Benutzername. Nur für den einen Verbindungsversuch im Speicher — Wifi Usage speichert und liest
+/// keine Passwörter; nach erfolgreicher Verbindung merkt sich macOS das Netz selbst.
+struct WifiCredentials {
     var username: String?
     var password: String
-}
-
-/// WLAN-Zugangsdaten, die du in Wifi Usage eingegeben hast — alle zusammen in **einem**
-/// Eintrag deines Anmelde-Schlüsselbunds („Wifi Usage – WLAN-Zugangsdaten“). macOS speichert ihn
-/// verschlüsselt (entsperrt nur mit deinem Login); ohne Rückfrage lesen darf ihn nur Wifi Usage.
-/// Ein gemeinsamer Eintrag statt einem pro WLAN: Nach einem Update fragt macOS nur einmal nach,
-/// nicht für jedes Netz. Gelesen wird einmal, danach aus dem Speicher. Passwörter landen nie in
-/// Dateien, im Log oder in Prozess-Argumenten und werden erst nach erfolgreicher Verbindung gespeichert.
-enum SavedPasswords {
-    private static let vaultService = "at.datenmonitor.vault"
-    private static let vaultAccount = "WLAN-Zugangsdaten"
-    private static let legacyService = "at.datenmonitor.wifi"   // bis 2.2: ein Eintrag pro WLAN
-    private static var cache: [String: WifiCredentials]?
-    private static var unreadable = false     // Abfrage abgelehnt/abgebrochen: nicht erneut fragen
-    private static let lock = NSRecursiveLock() // Zugriff aus Hintergrund-Threads
-
-    /// Nach einer Ablehnung wieder einen Leseversuch erlauben (z. B. beim Öffnen der Einstellungen).
-    static func allowRetry() { lock.lock(); unreadable = false; lock.unlock() }
-
-    /// Schlüsselbund-Abfragen dieses Prozesses scheitern still (errSecInteractionNotAllowed),
-    /// statt nach dem Mac-Passwort zu fragen. Touch ID (LocalAuthentication) bleibt unberührt.
-    static func disableKeychainPrompts() {
-        let status = SecKeychainSetUserInteractionAllowed(false)
-        if status != errSecSuccess { NSLog("Wifi Usage: Schlüsselbund-Abfragen nicht abschaltbar (Status \(status))") }
-    }
-
-    private static func query(_ service: String, _ account: String?) -> [String: Any] {
-        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
-        if let a = account { q[kSecAttrAccount as String] = a }
-        return q
-    }
-
-    /// Alle Zugangsdaten. nil = Eintrag nicht lesbar (z. B. Abfrage abgelehnt) — dann wird auch
-    /// nichts geschrieben, damit nie gespeicherte Daten überschrieben werden.
-    private static func vault() -> [String: WifiCredentials]? {
-        lock.lock(); defer { lock.unlock() }
-        if let c = cache { return c }
-        if unreadable { return nil }   // höchstens eine Abfrage, keine Schleife
-        var q = query(vaultService, vaultAccount)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        let status = SecItemCopyMatching(q as CFDictionary, &out)
-        if status == errSecItemNotFound { cache = [:]; return [:] }
-        guard status == errSecSuccess, let data = out as? Data,
-              let v = try? JSONDecoder().decode([String: WifiCredentials].self, from: data) else {
-            unreadable = true
-            NSLog("Wifi Usage: gespeicherte WLAN-Zugangsdaten nicht lesbar (Status \(status)) – frage in dieser Sitzung nicht erneut")
-            return nil
-        }
-        cache = v
-        return v
-    }
-
-    private static func store(_ v: [String: WifiCredentials]) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard let data = try? JSONEncoder().encode(v) else { return false }
-        var status = SecItemUpdate(query(vaultService, vaultAccount) as CFDictionary,
-                                   [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = query(vaultService, vaultAccount)
-            add[kSecValueData as String] = data
-            add[kSecAttrLabel as String] = "Wifi Usage – WLAN-Zugangsdaten"
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked   // nur bei entsperrtem Mac
-            status = SecItemAdd(add as CFDictionary, nil)
-        }
-        if status == errSecSuccess { cache = v }
-        return status == errSecSuccess
-    }
-
-    static func get(_ ssid: String) -> WifiCredentials? {
-        lock.lock(); defer { lock.unlock() }
-        guard let v = vault() else { return nil }   // nicht lesbar: auch keine Übernahme alter Einträge
-        if let c = v[ssid] { return c }
-        return migrate(ssid)
-    }
-
-    @discardableResult
-    static func set(_ ssid: String, _ credentials: WifiCredentials) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard var v = vault() else { return false }
-        v[ssid] = credentials
-        return store(v)
-    }
-
-    static func remove(_ ssid: String) {
-        if var v = vault(), v[ssid] != nil { v[ssid] = nil; _ = store(v) }
-        SecItemDelete(query(legacyService, ssid) as CFDictionary)
-    }
-
-    /// Netze mit gespeicherten Zugangsdaten (nur die Namen).
-    static func networks() -> [String] {
-        Array(Set(vault()?.keys.map { $0 } ?? []).union(legacyNetworks())).sorted()
-    }
-
-    // MARK: alte Einzeleinträge (bis 2.2) einmalig in den gemeinsamen Eintrag übernehmen
-    private static func legacyNetworks() -> [String] {
-        var q = query(legacyService, nil)
-        q[kSecReturnAttributes as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitAll
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let items = out as? [[String: Any]] else { return [] }
-        return items.compactMap { $0[kSecAttrAccount as String] as? String }
-    }
-
-    private static func migrate(_ ssid: String) -> WifiCredentials? {
-        guard legacyNetworks().contains(ssid) else { return nil }   // nur wenn es einen alten Eintrag gibt
-        var q = query(legacyService, ssid)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        let c = (try? JSONDecoder().decode(WifiCredentials.self, from: data))
-            ?? String(data: data, encoding: .utf8).map { WifiCredentials(username: nil, password: $0) }
-        if let c = c, set(ssid, c) { SecItemDelete(query(legacyService, ssid) as CFDictionary) }
-        return c
-    }
-}
-
-/// Gespeicherte Zugangsdaten nur nach Touch ID (ersatzweise Mac-Passwort) anzeigen.
-enum PasswordReveal {
-    static func authenticate(_ done: @escaping (Bool) -> Void) {
-        let ctx = LAContext()
-        var error: NSError?
-        guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else { done(false); return }
-        ctx.evaluatePolicy(.deviceOwnerAuthentication,
-                           localizedReason: L("gespeicherte WLAN-Passwörter anzeigen", "show saved Wi-Fi passwords")) { ok, _ in
-            DispatchQueue.main.async { done(ok) }
-        }
-    }
-
-    /// In die Zwischenablage kopieren und nach 60 s wieder leeren (falls dort noch dasselbe steht).
-    static func copy(_ text: String) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(text, forType: .string)
-        let change = pb.changeCount
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-            if pb.changeCount == change { pb.clearContents() }
-        }
-    }
 }
 
 // MARK: - Netz-Identität (Schlüssel + Anzeigename)
@@ -882,8 +741,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     var joinFrame = 0
     var failed: String?                // kurz „Fehlgeschlagen" am Netz statt Popup
     var failedReason = ""              // was beim Netz steht („Fehlgeschlagen" / „Nicht in Reichweite")
-    var askAgain: Set<String> = []     // gespeichertes Passwort hat nicht geklappt -> beim nächsten Klick neu fragen
-    var savedFailures: [String: Int] = [:]   // Fehlschläge hintereinander mit gespeichertem Passwort
+    var askAgain: Set<String> = []     // macOS-Profil hat nicht gereicht -> beim nächsten Klick nach dem Passwort fragen
     var powerTarget: Bool?             // Schalter sofort umlegen, bevor das System nachzieht
     var knownNetworks: Set<String> = []   // gespeicherte Netze (im Hintergrund aktualisiert)
     let pathMonitor = NWPathMonitor(requiredInterfaceType: .wifi)
@@ -903,9 +761,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         statusItem.button?.imagePosition = .imageOnly
 
         installEditMenu()
-        // Nie den macOS-Dialog „… möchte auf Schlüssel … zugreifen“: Ist der eigene Eintrag nicht
-        // ohne Rückfrage lesbar (z. B. nach einem Neubau), gilt er still als nicht vorhanden.
-        SavedPasswords.disableKeychainPrompts()
         Autostart.setup()
         RemoteHotspot.shared.onChange = { [weak self] in if self?.openMenu != nil { self?.updatePanel() } }
         Prefs.shared.onChange = { [weak self] in self?.prefsChanged() }
@@ -1343,34 +1198,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         }, retry: known ? { CoreWiFi.joinKnown(ssid, freshScan: true) } : nil)
     }
 
-    /// Verbinden über CoreWLAN mit eigenen Zugangsdaten. Was das Netz verlangt und ob Zugangsdaten
-    /// gespeichert sind, im Hintergrund klären (Netzsuche bzw. Schlüsselbund dürfen das Menü nicht
-    /// einfrieren). interactive = false: nie einen Dialog öffnen.
+    /// Verbinden über CoreWLAN; geschützt -> Passwort abfragen. Was das Netz verlangt, im
+    /// Hintergrund klären (Netzsuche darf das Menü nicht einfrieren). interactive = false: nie
+    /// einen Dialog öffnen, nur beim nächsten Klick nach dem Passwort fragen.
     private func joinWithCredentials(_ row: RowInfo, interactive: Bool) {
         let ssid = row.ssid
         let seen = inRange[ssid]
-        let askAgainNow = askAgain.contains(ssid)
         DispatchQueue.global(qos: .userInitiated).async {
             let (secure, enterprise) = self.security(of: ssid, seen: seen)
-            let saved = secure && !askAgainNow ? SavedPasswords.get(ssid) : nil
             RunLoop.main.perform(inModes: [.common]) {
-                self.proceed(row, secure: secure, enterprise: enterprise, saved: saved,
-                             savedUsername: saved?.username, interactive: interactive)
+                self.proceed(ssid, secure: secure, enterprise: enterprise, interactive: interactive)
             }
         }
     }
 
-    private func proceed(_ row: RowInfo, secure: Bool, enterprise: Bool, saved: WifiCredentials?,
-                         savedUsername: String?, interactive: Bool) {
-        let ssid = row.ssid
+    private func proceed(_ ssid: String, secure: Bool, enterprise: Bool, interactive: Bool) {
         // Offenes Netz: direkt.
-        if !secure { joinWithPassword(ssid, credentials: nil, save: false); return }
-
-        // Geschützt: mit den in Wifi Usage gespeicherten Zugangsdaten, sonst einmal danach fragen.
-        if let saved = saved, !enterprise || saved.username != nil {
-            joinWithPassword(ssid, credentials: saved, save: false)
-            return
-        }
+        if !secure { joinWithPassword(ssid, credentials: nil); return }
         guard interactive else {
             askAgain.insert(ssid)
             if failed == ssid { failedReason = L("Passwort nötig – nochmal klicken", "Password needed – click again") }
@@ -1378,9 +1222,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             return
         }
         openMenu?.cancelTracking()   // Dialog nicht hinter dem offenen Menü
-        guard let (credentials, remember) = askPassword(ssid, enterprise: enterprise,
-                                                        username: savedUsername) else { return }
-        joinWithPassword(ssid, credentials: credentials, save: remember)
+        guard let credentials = askPassword(ssid, enterprise: enterprise) else { return }
+        joinWithPassword(ssid, credentials: credentials)
     }
 
     /// Was verlangt das Netz? (geschützt?, Benutzername nötig?) Der Reihe nach: aktuelle
@@ -1404,18 +1247,17 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
 
     /// Fragt die WLAN-Zugangsdaten ab (nicht das Mac-Passwort): Passwort, bei Enterprise-Netzen
     /// (z. B. Schule, Uni, Firma, eduroam) zusätzlich den Benutzernamen. nil = abgebrochen.
-    func askPassword(_ ssid: String, enterprise: Bool, username: String?) -> (WifiCredentials, Bool)? {
-        let (alert, user, pass, remember) = Self.passwordAlert(ssid, enterprise: enterprise, username: username)
+    func askPassword(_ ssid: String, enterprise: Bool) -> WifiCredentials? {
+        let (alert, user, pass) = Self.passwordAlert(ssid, enterprise: enterprise)
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn, !pass.stringValue.isEmpty,
               !enterprise || !user.stringValue.isEmpty else { return nil }
         let name = user.stringValue.trimmingCharacters(in: .whitespaces)
-        return (WifiCredentials(username: enterprise ? name : nil, password: pass.stringValue), remember.state == .on)
+        return WifiCredentials(username: enterprise ? name : nil, password: pass.stringValue)
     }
 
     /// Baut den Anmelde-Dialog (ohne ihn anzuzeigen).
-    static func passwordAlert(_ ssid: String, enterprise: Bool, username: String?)
-        -> (NSAlert, NSTextField, NSSecureTextField, NSButton) {
+    static func passwordAlert(_ ssid: String, enterprise: Bool) -> (NSAlert, NSTextField, NSSecureTextField) {
         let alert = NSAlert()
         alert.icon = wifiAlertIcon
         alert.messageText = enterprise
@@ -1427,31 +1269,26 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         let width: CGFloat = 260
         let user = NSTextField(frame: .zero)
         user.placeholderString = L("Benutzername", "Username")
-        user.stringValue = username ?? ""
         let pass = NSSecureTextField(frame: .zero)
         pass.placeholderString = L("Passwort", "Password")
-        let remember = NSButton(checkboxWithTitle: enterprise ? L("Zugangsdaten merken", "Remember sign-in")
-                                                              : L("Passwort merken", "Remember password"),
-                                target: nil, action: nil)
-        remember.state = .on
 
-        let rows: [NSView] = enterprise ? [user, pass, remember] : [pass, remember]
+        let rows: [NSView] = enterprise ? [user, pass] : [pass]
         let box = NSView(frame: NSRect(x: 0, y: 0, width: width, height: CGFloat(rows.count) * 30))
         for (n, v) in rows.enumerated() {   // von oben nach unten
-            v.frame = NSRect(x: 0, y: box.frame.height - CGFloat(n + 1) * 30 + 4, width: width, height: v is NSButton ? 20 : 24)
+            v.frame = NSRect(x: 0, y: box.frame.height - CGFloat(n + 1) * 30 + 4, width: width, height: 24)
             box.addSubview(v)
         }
         alert.accessoryView = box
         alert.addButton(withTitle: L("Verbinden", "Join"))
         alert.addButton(withTitle: L("Abbrechen", "Cancel"))
-        alert.window.initialFirstResponder = enterprise && user.stringValue.isEmpty ? user : pass
-        return (alert, user, pass, remember)
+        alert.window.initialFirstResponder = enterprise ? user : pass
+        return (alert, user, pass)
     }
 
-    /// Verbindet über die öffentliche CoreWLAN-Schnittstelle (Passwort bleibt im Prozess).
-    func joinWithPassword(_ ssid: String, credentials: WifiCredentials?, save: Bool) {
+    /// Verbindet über die öffentliche CoreWLAN-Schnittstelle. Das Passwort bleibt nur für diesen
+    /// Versuch im Prozess; nach erfolgreicher Verbindung merkt sich macOS das Netz selbst.
+    func joinWithPassword(_ ssid: String, credentials: WifiCredentials?) {
         let cached = inRange[ssid]?.network
-        let usedSaved = credentials != nil && !save
         /// Schnell: erst mit dem schon bekannten Suchergebnis verbinden (wie Apple), nur ohne
         /// eines oder beim zweiten Versuch gezielt neu suchen (kostet 1–4 s).
         func attempt(fresh: Bool) -> String? {
@@ -1477,28 +1314,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 return error.localizedDescription
             }
         }
-        connect(ssid, attempt: { attempt(fresh: false) }, completion: { [weak self] joined, message in
+        connect(ssid, attempt: { attempt(fresh: false) }, completion: { [weak self] joined, _ in
             guard let self = self else { return }
-            if joined {
-                self.askAgain.remove(ssid)
-                self.savedFailures[ssid] = nil
-                if save, let c = credentials {
-                    DispatchQueue.global(qos: .utility).async {
-                        if !SavedPasswords.set(ssid, c) {
-                            NSLog("Wifi Usage: Zugangsdaten für \(ssid) konnten nicht gespeichert werden")
-                        }
-                    }
-                }
-            } else if usedSaved && message != "Netz nicht in Reichweite" {
-                // Erst nach zwei Fehlschlägen hintereinander das gespeicherte Passwort anzweifeln
-                // und beim nächsten Klick neu fragen (das alte wird erst ersetzt, wenn das neue klappt).
-                let failures = (self.savedFailures[ssid] ?? 0) + 1
-                self.savedFailures[ssid] = failures
-                if failures >= 2 {
-                    self.askAgain.insert(ssid)
-                    self.failedReason = L("Passwort prüfen – nochmal klicken", "Check password – click again")
-                }
-            }
+            if joined { self.askAgain.remove(ssid) }
+            else if credentials != nil { self.askAgain.insert(ssid) }   // nächster Klick fragt neu
         })
     }
 
@@ -1617,7 +1436,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     }
 
     @objc func openSettings() {
-        SavedPasswords.allowRetry()
         show(&settingsWindow, title: L("Einstellungen", "Settings"),
              size: NSSize(width: 480, height: 640), resizable: false) { SettingsView() }
         // Beim Schließen verwerfen: nächstes Öffnen startet frisch, aufgedeckte Passwörter sind weg.
@@ -2644,45 +2462,6 @@ struct Tooltip: View {
 // MARK: - Einstellungen (Fenster)
 struct SettingsView: View {
     @ObservedObject var prefs = Prefs.shared
-    @State private var savedNetworks = SavedPasswords.networks()
-    @State private var unlockedUntil: Date?                  // Touch-ID-Sitzung (60 s)
-    @State private var shown: [String: WifiCredentials] = [:] // gerade eingeblendete Netze
-    @State private var sessionToken = 0
-    @State private var copied: String?
-
-    private var unlocked: Bool { (unlockedUntil ?? .distantPast) > Date() }
-
-    /// Auge eines Netzes: ausblenden immer; einblenden in der 60-s-Sitzung sofort, sonst erst
-    /// nach Touch ID (startet eine neue Sitzung).
-    private func toggle(_ ssid: String) {
-        if shown[ssid] != nil { shown[ssid] = nil; return }
-        if unlocked { show(ssid); return }
-        PasswordReveal.authenticate { ok in
-            guard ok else { return }
-            startSession()
-            show(ssid)
-        }
-    }
-
-    private func show(_ ssid: String) {
-        if let c = SavedPasswords.get(ssid) { shown[ssid] = c }
-    }
-
-    private func startSession() {
-        unlockedUntil = Date().addingTimeInterval(60)
-        sessionToken += 1
-        let token = sessionToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { if sessionToken == token { lock() } }
-    }
-
-    /// Sitzung beenden: alles verdeckt, nächstes Einblenden fragt wieder nach Touch ID.
-    private func lock() {
-        unlockedUntil = nil
-        shown = [:]
-        copied = nil
-        sessionToken += 1
-    }
-
     var body: some View {
         Form {
             Section {
@@ -2726,64 +2505,16 @@ struct SettingsView: View {
             }
 
             Section {
-                if savedNetworks.isEmpty {
-                    Text(L("Noch keine gespeichert.", "None saved yet.")).foregroundStyle(.secondary)
-                }
-                ForEach(savedNetworks, id: \.self) { ssid in
-                    HStack(alignment: .center, spacing: 10) {
-                        Image(systemName: "wifi").foregroundStyle(.secondary).frame(width: 18)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(ssid)
-                            if let c = shown[ssid] {
-                                if let user = c.username {
-                                    Text(L("Benutzer: ", "User: ") + user).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Text(c.password).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-                            } else {
-                                Text("••••••••").font(.callout).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Button { toggle(ssid) } label: {
-                            Image(systemName: shown[ssid] != nil ? "eye.slash" : (unlocked ? "eye" : "touchid"))
-                        }
-                        .buttonStyle(.borderless)
-                        .help(shown[ssid] != nil ? L("Ausblenden", "Hide")
-                              : unlocked ? L("Einblenden", "Show") : L("Mit Touch ID einblenden", "Show with Touch ID"))
-                        if let c = shown[ssid] {
-                            Button {
-                                PasswordReveal.copy(c.password)
-                                copied = ssid
-                            } label: { Image(systemName: copied == ssid ? "checkmark" : "doc.on.doc") }
-                            .buttonStyle(.borderless)
-                            .help(L("Passwort kopieren (wird nach 60 s aus der Zwischenablage gelöscht)",
-                                    "Copy password (cleared from clipboard after 60 s)"))
-                        }
-                        Button(role: .destructive) {
-                            SavedPasswords.remove(ssid)
-                            savedNetworks = SavedPasswords.networks()
-                        } label: { Image(systemName: "trash") }
-                        .buttonStyle(.borderless)
-                        .help(L("Passwort löschen", "Delete password"))
-                    }
-                }
-            } header: {
                 HStack {
-                    Text(L("Gespeicherte WLAN-Passwörter", "Saved Wi-Fi passwords"))
+                    Label(L("Gespeicherte WLANs", "Saved Wi-Fi networks"), systemImage: "wifi")
                     Spacer()
-                    if let until = unlockedUntil {
-                        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                            let left = max(0, Int(until.timeIntervalSince(ctx.date).rounded(.up)))
-                            Label(L("Entsperrt · \(left) s", "Unlocked · \(left) s"), systemImage: "lock.open")
-                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                        }
-                        Button(L("Sperren", "Lock")) { lock() }
-                            .buttonStyle(.borderless)
+                    Button(L("Öffnen …", "Open …")) {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.wifi-settings-extension")!)
                     }
                 }
             } footer: {
-                Text(L("Verschlüsselt in deinem Schlüsselbund. Einblenden pro WLAN; einmal Touch ID (oder Mac-Passwort) entsperrt für 60 Sekunden, danach ist alles wieder verdeckt. Netze, die nur Apple gespeichert hat: Systemeinstellungen › WLAN.",
-                       "Encrypted in your keychain. Show per network; one Touch ID (or Mac password) unlocks for 60 seconds, then everything is hidden again. Networks saved only by Apple: System Settings › Wi-Fi."))
+                Text(L("Passwörter speichert macOS selbst, sobald eine Verbindung geklappt hat. Wifi Usage liest und speichert keine Passwörter.",
+                       "macOS saves passwords itself once a connection works. Wifi Usage never reads or stores passwords."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -2820,8 +2551,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { savedNetworks = SavedPasswords.networks() }
-        .onDisappear { lock() }   // Fenster zu -> wieder verdeckt
         .frame(width: 480)
         .frame(minHeight: 560)
     }

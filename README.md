@@ -28,7 +28,7 @@ Darstellung, Berechtigungen). Braucht **keinen Festplattenvollzugriff**.
 
 ![Netz-Details](docs/screenshots/netz-details.png)
 
-**Einstellungen** — mit gespeicherten WLAN-Passwörtern (pro Netz einblenden, Touch ID):
+**Einstellungen:**
 
 ![Einstellungen](docs/screenshots/einstellungen.png)
 
@@ -48,7 +48,7 @@ SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 
 > Bis Version 2.3 hieß die App „Datenmonitor“. Interne Kennungen heißen weiterhin so
 > (Bundle-ID `at.datenmonitor.widget`, Datenordner `~/Library/Application Support/Datenmonitor`),
-> damit Ortungsfreigabe, gespeicherte WLAN-Passwörter und der Verbrauchsverlauf erhalten bleiben.
+> damit Ortungsfreigabe und Verbrauchsverlauf erhalten bleiben.
 
 ## Dateien
 
@@ -155,34 +155,23 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
   blaue Kreis um.
 - **Bekannte Netze verbinden:** Wifi Usage nutzt dieselbe interne Schnittstelle wie Apples
   WLAN-Menü (CoreWiFi) und verbindet über das von macOS gespeicherte Netzprofil — offen, WPA
-  oder Enterprise, meist in unter einer Sekunde. Das Passwort holt sich macOS selbst; Wifi Usage
-  liest dafür nichts aus dem Schlüsselbund und fragt nichts ab.
-  - **Fremde geschützte Netze:** Beim ersten Mal fragt Wifi Usage nach dem **WLAN-Passwort**
-    (nicht dem Mac-Passwort) und verbindet über CoreWLAN; danach kennt macOS das Netz. Mit
-    „Passwort merken" landet es zusätzlich verschlüsselt in deinem Anmelde-Schlüsselbund (erst
-    nachdem die Verbindung geklappt hat) — als Rückfall, falls das Apple-Profil einmal nicht reicht.
-    Klappt beides nicht (z. B. Passwort geändert), steht „Passwort nötig – nochmal klicken".
+  oder Enterprise, meist in unter einer Sekunde. Das Passwort holt sich macOS selbst.
+  - **Passwörter: Wifi Usage liest und speichert keine.** Bei einem neuen geschützten Netz fragt
+    Wifi Usage einmal nach dem **WLAN-Passwort** (nicht dem Mac-Passwort) und verbindet über
+    CoreWLAN. Das Passwort bleibt nur für diesen Versuch im Speicher; nach erfolgreicher
+    Verbindung merkt sich macOS das Netz selbst (`rememberJoinedNetworks`). Verwalten:
+    Systemeinstellungen › WLAN. Reicht das macOS-Profil einmal nicht (z. B. Passwort geändert),
+    steht „Passwort nötig – nochmal klicken".
   - **Was ein Netz verlangt, erkennt Wifi Usage selbst** — der Reihe nach aus der aktuellen
     Suchliste, dem System-Zwischenspeicher, dem von macOS gespeicherten Profil und zuletzt einer
     gezielten Suche: offen oder OWE („Enhanced Open", verschlüsselt ohne Passwort) → keine
     Abfrage; WPA/WPA2/WPA3-Personal → nur Passwort; Enterprise → Benutzername + Passwort.
   - **Enterprise-Netze** (WPA2/WPA3-Enterprise, 802.1X — z. B. Schule, Uni, Firma, eduroam):
-    Die Abfrage hat dann zusätzlich ein Feld **Benutzername**. Benutzername und Passwort werden
-    gemeinsam im selben verschlüsselten Schlüsselbund-Eintrag gespeichert und über Apples
-    Enterprise-Schnittstelle verbunden (ohne Zertifikat-Identität; Netze, die ein eigenes
+    Die Abfrage hat dann zusätzlich ein Feld **Benutzername**; verbunden wird über Apples
+    Enterprise-Schnittstelle (ohne Zertifikat-Identität; Netze, die ein eigenes
     Nutzerzertifikat verlangen, gehen weiter über Apples Menü).
   - In alle Felder lässt sich mit **⌘V einfügen** (auch ⌘C, ⌘X, ⌘A, ⌘Z) — dafür hat die App ein
     unsichtbares „Bearbeiten“-Menü, weil Menüleisten-Apps sonst keine dieser Tastenkürzel haben.
-  - **Die Abfrage selbst ist bewusst kurz** („Passwort eingeben.“ bzw. „Benutzername und
-    Passwort eingeben.“, dazu „merken“). Was beim Merken passiert: Die Zugangsdaten landen
-    verschlüsselt in deinem Anmelde-Schlüsselbund, ohne Rückfrage lesen kann sie nur
-    Wifi Usage, und gespeichert wird erst, wenn die Verbindung damit geklappt hat.
-    Alle Zugangsdaten liegen zusammen in **einem** Eintrag („Wifi Usage – WLAN-Zugangsdaten“).
-    **Den macOS-Dialog „… möchte auf Schlüssel zugreifen“ gibt es nie:** Wifi Usage schaltet
-    Schlüsselbund-Rückfragen für sich ab. macOS bindet den Eintrag an genau diese Programmversion;
-    nach einem Update ist er deshalb still nicht lesbar und Wifi Usage verbindet einfach über
-    Apples Profile. Es gibt keine Abfrage-Schleife. Prüfung und Schlüsselbund laufen im
-    Hintergrund, das Menü friert dabei nicht ein.
   Die Schnittstelle ist privat und undokumentiert: Ändert Apple sie mit einem macOS-Update,
   zeigt das Menü „Fehlgeschlagen" und man wechselt über Apples Menü.
   (`networksetup` scheitert seit macOS 14 mit „Could not find network" bzw. Fehler -3900.)
@@ -230,14 +219,8 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
 - **Berechtigungen:** Status der Ortungsdienste (mit Knopf zum Erlauben). Festplattenvollzugriff
   ist **nicht nötig**: Das Widget liest nur die Netzwerkzähler des Systems (`netstat`, `arp`,
   `networksetup`) und seinen eigenen Ordner unter `Application Support`.
-- **Gespeicherte WLAN-Passwörter:** alle Netze, deren Zugangsdaten in Wifi Usage gespeichert
-  sind — Passwort und ggf. Benutzername zunächst verdeckt. Jedes Netz hat ein **Auge zum Ein-
-  und Ausblenden**. Das erste Einblenden fragt nach **Touch ID** (ersatzweise Mac-Passwort) und
-  entsperrt für **60 Sekunden**: In der Zeit lassen sich beliebige Netze ohne neue Abfrage ein-
-  und ausblenden (oben „Entsperrt · 41 s“ und „Sperren“). Danach oder beim Schließen des Fensters
-  ist alles wieder verdeckt, das nächste Einblenden fragt erneut. Kopieren legt das Passwort in die Zwischenablage und leert sie nach
-  60 Sekunden wieder. Einzelne Einträge lassen sich löschen. (Passwörter, die nur Apple
-  gespeichert hat: Systemeinstellungen › WLAN › Netz › „Passwort kopieren“.)
+- **Gespeicherte WLANs:** Knopf zu Systemeinstellungen › WLAN (dort verwaltet macOS Netze und
+  Passwörter).
 - **Daten:** Datenordner im Finder zeigen.
 - **Unterstützen:** Buy-Me-a-Coffee-Knopf, dazu Version und „Wifi Usage beenden".
 
@@ -248,9 +231,8 @@ Tipp: Mit einem Stil mit WLAN-Symbol kann man das System-WLAN-Symbol ausblenden:
 Systemeinstellungen → Kontrollzentrum → WLAN → „In der Menüleiste nicht anzeigen".
 
 **WLAN wechseln:** Die Netzsuche läuft beim Öffnen des Menüs im Hintergrund; die Liste
-aktualisiert sich, sobald sie fertig ist. Ein Klick verbindet mit `networksetup`, das
-Passwort kommt aus dem Schlüsselbund. Klappt das nicht, bietet ein Hinweis direkt die
-WLAN-Einstellungen an.
+aktualisiert sich, sobald sie fertig ist. Ein Klick verbindet (Details oben unter „Bekannte
+Netze verbinden“).
 
 ## Wie es zählt
 
