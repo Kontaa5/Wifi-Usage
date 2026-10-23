@@ -7,8 +7,8 @@
 #
 set -eu
 
-VERSION="2.9"
-BUILD="14"
+VERSION="2.9.1"
+BUILD="15"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="${1:?Ziel angeben, z. B. ./build-app.sh \"\$HOME/Applications/Wifi Usage.app\"}"

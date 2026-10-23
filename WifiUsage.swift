@@ -198,8 +198,15 @@ final class Storage {
         load()
     }
     func load() {
-        guard let d = try? Data(contentsOf: fileURL),
-              let s = try? JSONDecoder().decode(Store.self, from: d) else { return }
+        guard let d = try? Data(contentsOf: fileURL) else { return }   // erster Start: noch keine Datei
+        guard let s = try? JSONDecoder().decode(Store.self, from: d) else {
+            // Kaputt oder unbekanntes Format: beiseitelegen statt beim nächsten Speichern überschreiben
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HHmmss"
+            let keep = fileURL.deletingLastPathComponent().appendingPathComponent("usage.unlesbar-\(f.string(from: Date())).json")
+            try? FileManager.default.moveItem(at: fileURL, to: keep)
+            NSLog("Wifi Usage: usage.json nicht lesbar, gesichert als \(keep.lastPathComponent)")
+            return
+        }
         store = s
     }
     func save() {
@@ -222,22 +229,17 @@ enum Sys {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    private static var cachedIface: String?
-    static func wifiInterface() -> String {
-        if let c = cachedIface { return c }
-        if let n = CWWiFiClient.shared().interface()?.interfaceName { cachedIface = n; return n }
-        let out = run("/usr/sbin/networksetup", ["-listallhardwareports"])
-        let lines = out.components(separatedBy: "\n")
-        for (i, line) in lines.enumerated() {
-            if line.contains("Hardware Port: Wi-Fi") || line.contains("Hardware Port: AirPort") {
-                if i + 1 < lines.count {
-                    let parts = lines[i + 1].components(separatedBy: " ")
-                    if let dev = parts.last, !dev.isEmpty { cachedIface = dev; return dev }
-                }
-            }
+    /// WLAN-Schnittstelle (meist en0). static let: einmal ermittelt, threadsicher.
+    static func wifiInterface() -> String { iface }
+    private static let iface: String = {
+        if let n = CWWiFiClient.shared().interface()?.interfaceName { return n }
+        let lines = run("/usr/sbin/networksetup", ["-listallhardwareports"]).components(separatedBy: "\n")
+        for (i, line) in lines.enumerated()
+        where (line.contains("Hardware Port: Wi-Fi") || line.contains("Hardware Port: AirPort")) && i + 1 < lines.count {
+            if let dev = lines[i + 1].components(separatedBy: " ").last, !dev.isEmpty { return dev }
         }
-        cachedIface = "en0"; return "en0"
-    }
+        return "en0"
+    }()
 
     /// IPv4-Adresse der Schnittstelle (leer = nicht mit WLAN verbunden).
     static func ifaceIP(_ iface: String) -> String? {
@@ -348,9 +350,17 @@ enum CoreWiFi {
 
     /// Pro Wechsel eine frische Verbindung zum WLAN-Dienst: Eine lange gehaltene wird nach
     /// Ruhezustand oder WLAN aus/an still ungültig, Aufträge laufen dann ins Leere.
+    /// nil, wenn die interne Schnittstelle fehlt oder sich geändert hat (dann kein Absturz,
+    /// sondern „Fehlgeschlagen").
     private static func makeInterface() -> NSObject? {
-        guard loaded, let cls = NSClassFromString("CWFInterface") as? NSObject.Type else { return nil }
+        guard loaded, let cls = NSClassFromString("CWFInterface") as? NSObject.Type,
+              let cScan = NSClassFromString("CWFScanParameters") as? NSObject.Type,
+              let cAssoc = NSClassFromString("CWFAssocParameters") as? NSObject.Type else { return nil }
         let i = cls.init()
+        guard i.supports("activate", "knownNetworkProfilesWithProperties:", "performScanWithParameters:error:",
+                         "associateWithParameters:error:"),
+              cScan.init().supports("setCacheOnly:"),
+              cAssoc.init().supports("setKnownNetworkProfile:", "setScanResult:") else { return nil }
         _ = i.perform(NSSelectorFromString("activate"))
         return i
     }
@@ -360,7 +370,7 @@ enum CoreWiFi {
         if let s = obj as? NSSet { return s.allObjects as? [NSObject] ?? [] }
         return []
     }
-    private static func name(_ o: NSObject) -> String? { o.value(forKey: "networkName") as? String }
+    private static func name(_ o: NSObject) -> String? { o.safeValue("networkName") as? String }
 
     /// Sicherheitsart aus dem von macOS gespeicherten Profil (z. B. "wpa2-personal",
     /// "wpa2-enterprise"), nil = kein Profil.
@@ -396,7 +406,7 @@ enum CoreWiFi {
             }
             let found = unsafeBitCast(i.method(for: scanSel), to: ObjFn.self)(i, scanSel, p, &error)
             return list(found).filter { name($0) == ssid }
-                .max { ($0.value(forKey: "RSSI") as? Int ?? -200) < ($1.value(forKey: "RSSI") as? Int ?? -200) }
+                .max { ($0.safeValue("RSSI") as? Int ?? -200) < ($1.safeValue("RSSI") as? Int ?? -200) }
         }
         guard let result = (freshScan ? nil : scan(cacheOnly: true)) ?? scan(cacheOnly: false) else {
             return error?.localizedDescription ?? "Netz nicht in Reichweite"
@@ -411,6 +421,13 @@ enum CoreWiFi {
         if i.responds(to: NSSelectorFromString("invalidate")) { _ = i.perform(NSSelectorFromString("invalidate")) }
         return ok ? nil : (error?.localizedDescription ?? "Verbinden abgelehnt")
     }
+}
+
+extension NSObject {
+    /// value(forKey:) ohne Absturz: Private Apple-Objekte können Schlüssel mit einem Update verlieren.
+    func safeValue(_ key: String) -> Any? { responds(to: NSSelectorFromString(key)) ? value(forKey: key) : nil }
+    /// Gibt es alle diese Methoden? (vor Aufrufen privater Apple-Methoden prüfen)
+    func supports(_ selectors: String...) -> Bool { selectors.allSatisfy { responds(to: NSSelectorFromString($0)) } }
 }
 
 // MARK: - Instant Hotspot (Apples interne Sharing-Schnittstelle)
@@ -436,6 +453,8 @@ final class RemoteHotspot: NSObject {
     func start() {
         guard session == nil, Self.loaded, let cls = NSClassFromString("SFRemoteHotspotSession") as? NSObject.Type else { return }
         let s = cls.init()
+        guard s.supports("setDelegate:", "startBrowsing", "stopBrowsing",
+                         "enableHotspotForDevice:withCompletionHandler:") else { return }
         s.setValue(self, forKey: "delegate")
         _ = s.perform(NSSelectorFromString("startBrowsing"))
         session = s
@@ -452,8 +471,8 @@ final class RemoteHotspot: NSObject {
         RunLoop.main.perform(inModes: [.common]) {
             self.devices = [:]   // jede Meldung ist die vollständige Liste
             for o in objs {
-                guard let name = o.value(forKey: "deviceName") as? String, !name.isEmpty else { continue }
-                let battery = (o.value(forKey: "batteryLife") as? NSNumber)?.intValue
+                guard let name = o.safeValue("deviceName") as? String, !name.isEmpty else { continue }
+                let battery = (o.safeValue("batteryLife") as? NSNumber)?.intValue
                 self.devices[name] = Device(name: name, network: Self.networkName(o),
                                             battery: battery.flatMap { (0...100).contains($0) ? $0 : nil },
                                             object: o, seenAt: Date())
