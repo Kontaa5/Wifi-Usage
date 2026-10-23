@@ -134,7 +134,7 @@ Klick öffnet ein Menü im Stil des macOS-WLAN-Menüs (siehe Screenshots oben):
 - **Schalter** oben schaltet das WLAN ein/aus (blau = an).
 - **Hotspots** stehen mit Ketten-Symbol in derselben Liste „Bekannte Netzwerke“.
 - **Eigene iPhones/iPads (Instant Hotspot):** Geräte mit derselben Apple-ID stehen immer im Menü,
-  auch wenn ihr Hotspot aus ist — mit Netzart und Akku („Hotspot · LTE · 75 %“). Ein Klick
+  auch wenn ihr Hotspot aus ist — mit Netzart („Hotspot · LTE“). Ein Klick
   schaltet den Hotspot per Bluetooth ein, sucht gezielt danach und verbindet (bekanntes Netz über
   Apples Profil, sonst mit dem Passwort, das das iPhone mitschickt), wie Apples „Persönlicher
   Hotspot“. Dauert etwa 10–15 Sekunden. Abschaltbar: Einstellungen › „iPhone-Hotspot immer

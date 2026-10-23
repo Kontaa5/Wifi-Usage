@@ -438,7 +438,6 @@ final class RemoteHotspot: NSObject {
     struct Device {
         let name: String          // = Netzname des Hotspots
         let network: String?      // „LTE", „5G" …
-        let battery: Int?         // Prozent
         let object: NSObject      // für den Weckruf
         let seenAt: Date
     }
@@ -472,9 +471,7 @@ final class RemoteHotspot: NSObject {
             self.devices = [:]   // jede Meldung ist die vollständige Liste
             for o in objs {
                 guard let name = o.safeValue("deviceName") as? String, !name.isEmpty else { continue }
-                let battery = (o.safeValue("batteryLife") as? NSNumber)?.intValue
                 self.devices[name] = Device(name: name, network: Self.networkName(o),
-                                            battery: battery.flatMap { (0...100).contains($0) ? $0 : nil },
                                             object: o, seenAt: Date())
             }
             self.onChange?()
@@ -1064,7 +1061,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                     : (connected || u.total > 0) && known ? gb(u.total) : nil
                 let offline = connected && noInternet
                 let phoneInfo = phone.map { p in
-                    ([L("Hotspot", "Hotspot"), p.network] + [p.battery.map { "\($0) %" }]).compactMap { $0 }.joined(separator: " · ")
+                    // kein Akku: der Wert vom iPhone ist grob/veraltet (zeigte immer „75 %“), das wäre irreführend
+                    [L("Hotspot", "Hotspot"), p.network].compactMap { $0 }.joined(separator: " · ")
                 }
                 return RowInfo(ssid: ssid, detail: detail,
                                symbol: offline ? "wifi.exclamationmark" : phone != nil || NetID.isHotspot(ssid) ? "personalhotspot" : "wifi",
