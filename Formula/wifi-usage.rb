@@ -3,8 +3,8 @@ class WifiUsage < Formula
   homepage "https://github.com/Kontaa5/Wifi-Usage"
   license "PolyForm-Noncommercial-1.0.0"
   url "https://github.com/Kontaa5/Wifi-Usage.git",
-      tag:      "v2.9.2",
-      revision: "bed7d388e6c7fe9e634745d5c22cd4b2e91aeb3c"
+      tag:      "v2.9.3",
+      revision: "026d334054e87f60e854a6a0a198f7b330124b62"
 
   depends_on :macos
 
@@ -25,7 +25,7 @@ class WifiUsage < Formula
       Einmal starten – die App richtet ihren Autostart danach selbst ein:
         wifi-usage
 
-      Nach einem Update neu starten:
+      Nach einem Update neu starten (macOS fragt dann einmal neu nach den Ortungsdiensten):
         launchctl kickstart -k gui/$(id -u)/at.datenmonitor.widget
 
       Beim ersten Start fragt macOS nach den Ortungsdiensten: bitte erlauben,
