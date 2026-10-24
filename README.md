@@ -80,6 +80,9 @@ wifi-usage
 
 Update: `brew upgrade kontaa5/wifi-usage/wifi-usage`, danach neu starten mit
 `launchctl kickstart -k gui/$(id -u)/at.datenmonitor.widget` (oder ab- und wieder anmelden).
+Nach jedem Update fragt macOS einmal neu nach den Ortungsdiensten: Die Brew-Version ist an genau
+ihren Build gebunden, damit sich kein anderes Programm als Wifi Usage ausgeben und deine
+Ortungsfreigabe mitbenutzen kann.
 
 ### Aus dem Quellcode
 
@@ -105,13 +108,15 @@ xcode-select --install
 ## Update (neuer Code)
 
 Neuen Code in `WifiUsage.swift` einfügen, dann `./install-widget.sh`. Das Skript
-entlädt die laufende Version selbst und startet die neue. Die App wird mit einer festen
-Anforderung (nur Bundle-ID) signiert, daher bleibt die Ortungsdienste-Freigabe über Neubauten
-erhalten. (Vor Version 2.2 ging sie bei jedem Neubau verloren — dann fehlte der WLAN-Name und
+entlädt die laufende Version selbst und startet die neue. Das Skript baut eine
+**Entwickler-Version** (`build-app.sh … --dev`): Die Signatur hängt nur an der Bundle-ID, daher
+bleibt die Ortungsdienste-Freigabe über Neubauten erhalten (keine Abfrage bei jedem Build).
+Ohne `--dev` (Homebrew) ist die Signatur an genau diesen Build gebunden. (Vor Version 2.2 ging sie bei jedem Neubau verloren — dann fehlte der WLAN-Name und
 der Verbrauch landete beim falschen Netz.)
 
 Beim Start schreibt das Widget den Ortungsstatus ins Log (`widget.err.log` im Datenordner,
-Status 3 = erlaubt, 0 = noch nicht gefragt).
+Status 3 = erlaubt, 0 = noch nicht gefragt). Das Log enthält WLAN-Namen und Wechsel; Einträge
+älter als **90 Tage** löscht die App selbst (beim Start und täglich).
 
 Laufende Version nur neu starten:
 

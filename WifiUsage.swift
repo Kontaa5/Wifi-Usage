@@ -778,6 +778,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
 
         installEditMenu()
         Autostart.setup()
+        Log.prune()   // alte Log-Einträge weg, danach täglich
+        let daily = Timer(timeInterval: 86_400, repeats: true) { _ in Log.prune() }
+        RunLoop.main.add(daily, forMode: .common)
         RemoteHotspot.shared.onChange = { [weak self] in if self?.openMenu != nil { self?.updatePanel() } }
         Prefs.shared.onChange = { [weak self] in self?.prefsChanged() }
         Actions.openSettings = { [weak self] in self?.openSettings() }
@@ -2694,6 +2697,33 @@ enum Autostart {
     static func disable() {
         try? FileManager.default.removeItem(at: plistURL)
         NSLog("Wifi Usage: Autostart entfernt")
+    }
+}
+
+// MARK: - Log (widget.err.log): nur die letzten 90 Tage
+/// Das Log zeigt, was die App getan hat (Starts, WLAN-Wechsel, Fehler) — mit WLAN-Namen, also
+/// privat. Einträge älter als 90 Tage werden gelöscht. Die Datei wird an Ort und Stelle gekürzt,
+/// weil launchd sie offen hält und weiter hineinschreibt.
+enum Log {
+    static let keepDays = 90
+
+    static func prune() {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Datenmonitor/widget.err.log")
+        guard let h = try? FileHandle(forUpdating: url), let data = try? h.readToEnd(),
+              let text = String(data: data, encoding: .utf8) else { return }
+        defer { try? h.close() }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
+        let cutoff = f.string(from: Date().addingTimeInterval(-Double(keepDays) * 86_400))
+        var keep = true   // Zeilen ohne Datum (Fortsetzungen) folgen der Zeile davor
+        let kept = text.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+            let day = line.prefix(10)
+            if day.count == 10, f.date(from: String(day)) != nil { keep = day >= cutoff }
+            return keep
+        }.joined(separator: "\n")
+        guard kept.utf8.count < data.count else { return }   // nichts zu löschen
+        try? h.truncate(atOffset: 0)
+        try? h.write(contentsOf: Data(kept.utf8))
     }
 }
 

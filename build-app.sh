@@ -3,16 +3,18 @@
 # build-app.sh — Baut „Wifi Usage.app“ an den angegebenen Ort. Genutzt von install-widget.sh
 # und der Homebrew-Formel. Nur Apple-Bordmittel (swiftc aus den Xcode Command Line Tools).
 #
-#   ./build-app.sh "$HOME/Applications/Wifi Usage.app"
+#   ./build-app.sh "$HOME/Applications/Wifi Usage.app"          Release (Homebrew)
+#   ./build-app.sh "$HOME/Applications/Wifi Usage.app" --dev    Entwicklung (install-widget.sh)
 #
 set -eu
 
-VERSION="2.9.2"
-BUILD="16"
+VERSION="2.9.3"
+BUILD="17"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="${1:?Ziel angeben, z. B. ./build-app.sh \"\$HOME/Applications/Wifi Usage.app\"}"
 BIN="wifi-usage"
+DEV="${2:-}"
 
 if ! command -v swiftc >/dev/null 2>&1; then
   echo "Fehler: 'swiftc' fehlt. Bitte einmalig die Xcode Command Line Tools installieren:"
@@ -49,10 +51,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-# Ad-hoc-Signatur mit fester Anforderung (nur Bundle-ID): Die Ortungsdienste-Freigabe (= WLAN-Name)
-# bleibt so über Neubauten und Updates erhalten. Den eigenen Schlüsselbund-Eintrag bindet macOS
-# dagegen an genau diese Programmversion; Wifi Usage fragt dann nicht nach, sondern verbindet über
-# Apples Profile. Hardened Runtime: verhindert, dass fremder Code in die App eingeschleust wird
-# (DYLD_INSERT_LIBRARIES) und so ohne Rückfrage auf ihren Schlüsselbund-Eintrag zugreift.
-codesign --force --sign - --options runtime --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
+# Ad-hoc-Signatur mit Hardened Runtime (kein Einschleusen fremden Codes per DYLD_INSERT_LIBRARIES).
+# Release: macOS bindet die Ortungsdienste-Freigabe an genau diesen Build — kein anderes Programm
+# kann sich als Wifi Usage ausgeben; nach jedem Update fragt macOS einmal neu.
+# --dev: Freigabe hängt nur an der Bundle-ID und bleibt über Neubauten erhalten (keine Abfrage bei
+# jedem Build; dafür könnte sich ein Programm mit derselben ID als Wifi Usage ausgeben).
+if [ "$DEV" = "--dev" ]; then
+  codesign --force --sign - --options runtime --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
+else
+  codesign --force --sign - --options runtime "$APP"
+fi
 echo "Gebaut: $APP (Version $VERSION)"

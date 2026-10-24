@@ -16,7 +16,7 @@ echo "== Wifi Usage: Installation =="
 
 # 1. App bauen (Compiler-Prüfung, Info.plist und Signatur stehen in build-app.sh)
 mkdir -p "$SUPPORT_DIR"
-"$SRC_DIR/build-app.sh" "$APP"
+"$SRC_DIR/build-app.sh" "$APP" --dev   # Entwickler-Build: Ortungsfreigabe bleibt über Neubauten
 echo "Installiert: $APP"
 
 # Alte Versionen aufräumen (ohne .app bzw. unter dem alten Namen „Datenmonitor")
