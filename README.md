@@ -57,7 +57,7 @@ SwiftBar/xbar, kein Netzwerkzugriff, keine Telemetrie. Daten rein lokal unter
 - `Formula/wifi-usage.rb` — Homebrew-Formel (dieses Repo ist zugleich der Tap)
 - `install-widget.sh` — baut **einmal** die `Wifi Usage.app` und richtet den Autostart ein
 - `at.datenmonitor.widget.plist` — launchd-Vorlage (Autostart nach Login)
-- `AppIcon.icns` — App-Icon (Apples WLAN-Symbol in Blau, transparenter Hintergrund)
+- `AppIcon.icns` — App-Icon (eigenes WLAN-Zeichen in Blau, transparenter Hintergrund; erzeugt mit `tools/make-icon.swift`)
 
 ## Installation
 
@@ -349,6 +349,22 @@ rm ~/Library/LaunchAgents/at.datenmonitor.widget.plist
 rm -rf ~/Library/Application\ Support/Datenmonitor   # optional: Daten löschen
 ```
 
+## Datenschutz
+
+- **Keine Daten verlassen deinen Mac.** Wifi Usage macht keine Netzwerkaufrufe, hat keine
+  Telemetrie, keine Analyse, keine Konten. Der Entwickler bekommt nichts zu sehen.
+- **Lokal gespeichert** (`~/Library/Application Support/Datenmonitor`): Verbrauch pro WLAN und Tag,
+  WLAN-Namen, Router- und Sender-Adressen (MAC/BSSID) und wann du zuletzt verbunden warst. Diese
+  Adressen verraten über öffentliche WLAN-Datenbanken ungefähr, wo du warst — Ordner nicht
+  weitergeben. Das Log dort hält nur die letzten 90 Tage. Löschen: Ordner in den Papierkorb.
+- **Ortungsdienste** nutzt die App nur, weil macOS sonst den WLAN-Namen verbirgt; der Standort
+  selbst wird nie abgefragt.
+- **Passwörter** liest und speichert Wifi Usage nicht — das macht macOS selbst.
+- **Bluetooth:** Für den iPhone-Hotspot fragt die App über macOS deine eigenen Geräte (gleiche
+  Apple-ID) ab; das läuft über Apple, nicht über Wifi Usage.
+- **Buy Me a Coffee:** Der Knopf öffnet die Seite im Browser; dort gelten die Datenschutzregeln
+  von Buy Me a Coffee.
+
 ## Lizenz
 
 [PolyForm Noncommercial 1.0.0](LICENSE.md) — © 2026 Gabriel Suntinger.
@@ -357,5 +373,10 @@ rm -rf ~/Library/Application\ Support/Datenmonitor   # optional: Daten löschen
   privat, zum Lernen, in Schule, Uni oder gemeinnützigen Organisationen.
 - **Nicht erlaubt:** Wifi Usage oder veränderte Versionen verkaufen oder sonst kommerziell nutzen.
 - Weitergaben müssen den Lizenztext und den Copyright-Hinweis enthalten.
+- Ohne Gewährleistung und Haftung (siehe Lizenz). Versionen vor 2.8.1 trugen im Quelltext den
+  Hinweis „Public Domain / CC0“.
+
+Marken: Apple, iPhone, macOS und Wi-Fi sind Marken ihrer Inhaber; Wifi Usage ist ein privates
+Projekt ohne Verbindung zu Apple oder der Wi-Fi Alliance.
 
 Unterstützen geht über [Buy Me a Coffee](https://buymeacoffee.com/suntinger).

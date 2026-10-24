@@ -13,11 +13,11 @@
 //   - Router-MAC (via `arp`) wird der SSID zugeordnet, damit ältere Einträge
 //     (vor der Freigabe gezählt) automatisch unter dem echten Namen zusammenlaufen.
 //
-// Nur Apple-Bordmittel: swiftc, AppKit, SwiftUI, Charts, CoreWLAN, CoreLocation. Kein Netzwerk, keine Telemetrie.
+// Nur Apple-Bordmittel: swiftc, AppKit, SwiftUI, Charts, CoreWLAN, CoreLocation. Keine Netzwerkaufrufe, keine Telemetrie.
 // Daten lokal unter ~/Library/Application Support/Datenmonitor/usage.json
 //
 // Bauen:  ./install-widget.sh   (baut die .app, signiert sie ad-hoc, richtet Autostart ein)
-// Lizenz: Public Domain / CC0
+// Lizenz: PolyForm Noncommercial 1.0.0 (siehe LICENSE.md) — © 2026 Gabriel Suntinger
 // ---------------------------------------------------------------------------
 
 import AppKit
@@ -33,7 +33,7 @@ let SAMPLE_INTERVAL: TimeInterval = 20
 let GIB: Double = 1_073_741_824
 let SSID_PREFIX = "ssid:"          // Schlüssel für Netze mit bekannter SSID: "ssid:<Name>"
 let UNKNOWN_KEY = "unbekannt"       // weder SSID noch Router-MAC ermittelbar
-let APP_VERSION = "2.4"
+let APP_VERSION = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
 
 // Buy Me a Coffee: hier deinen eigenen Link eintragen (Anleitung in der README).
 let COFFEE_URL = "https://buymeacoffee.com/suntinger"
@@ -377,8 +377,12 @@ enum CoreWiFi {
     static func profileSecurity(_ ssid: String) -> String? {
         guard let i = makeInterface() else { return nil }
         let profiles = list(i.perform(NSSelectorFromString("knownNetworkProfilesWithProperties:"), with: nil)?.takeUnretainedValue())
-        guard let p = profiles.first(where: { name($0) == ssid }) else { return nil }
-        let d = String(describing: p)
+        return profiles.first(where: { name($0) == ssid }).flatMap(security(of:))
+    }
+
+    /// Sicherheitsart eines Profils oder Suchergebnisses („wpa2-personal" …), steht in dessen Beschreibung.
+    private static func security(of o: NSObject) -> String? {
+        let d = String(describing: o)
         guard let r = d.range(of: "security=[^,\\s]*", options: .regularExpression) else { return nil }
         return String(d[r].dropFirst("security=".count)).lowercased()
     }
@@ -393,6 +397,10 @@ enum CoreWiFi {
         // 1) gespeichertes Profil zum Namen
         let profiles = list(i.perform(NSSelectorFromString("knownNetworkProfilesWithProperties:"), with: nil)?.takeUnretainedValue())
         guard let profile = profiles.first(where: { name($0) == ssid }) else { return "Kein gespeichertes Profil" }
+        // Evil Twin: Ist das gespeicherte Netz verschlüsselt, offene Sender gleichen Namens ignorieren
+        // (sonst könnte ein fremdes offenes Netz mit demselben Namen den Verkehr mitlesen).
+        let sec = security(of: profile) ?? ""
+        let secured = !(sec.isEmpty || sec == "none" || sec == "open" || sec.hasPrefix("owe"))
 
         // 2) Suchergebnis zum Namen (stärkster Sender): erst aus dem System-Zwischenspeicher
         //    (sofort), nur wenn das Netz dort fehlt, frisch suchen (dauert einige Sekunden).
@@ -405,7 +413,7 @@ enum CoreWiFi {
                 unsafeBitCast(p.method(for: cacheSel), to: SetBoolFn.self)(p, cacheSel, true)
             }
             let found = unsafeBitCast(i.method(for: scanSel), to: ObjFn.self)(i, scanSel, p, &error)
-            return list(found).filter { name($0) == ssid }
+            return list(found).filter { name($0) == ssid && !(secured && ($0.safeValue("isOpen") as? Bool) == true) }
                 .max { ($0.safeValue("RSSI") as? Int ?? -200) < ($1.safeValue("RSSI") as? Int ?? -200) }
         }
         guard let result = (freshScan ? nil : scan(cacheOnly: true)) ?? scan(cacheOnly: false) else {
@@ -1170,8 +1178,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 return CoreWiFi.joinKnown(ssid, freshScan: true)
             }, completion: { [weak self] joined, message in
                 guard let self = self, !joined, message != "Netz nicht in Reichweite" else { return }
-                // Profil hat nicht gereicht (z. B. Passwort geändert): still mit eigenen
-                // Zugangsdaten versuchen, sonst beim nächsten Klick nach dem Passwort fragen.
+                // Profil hat nicht gereicht (z. B. Passwort geändert): offenes Netz direkt versuchen,
+                // geschütztes beim nächsten Klick nach dem Passwort fragen.
                 self.joinWithCredentials(row, interactive: false)
             })
             return
@@ -1198,7 +1206,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 tries += 1
                 do {
                     let found = try iface.scanForNetworks(withName: ssid, includeHidden: true)
-                    if let n = found.max(by: { $0.rssiValue < $1.rssiValue }) {
+                    // iPhone-Hotspots sind immer verschlüsselt: offenes Netz gleichen Namens = Fälschung
+                    if let n = found.filter(\.needsCredentials).max(by: { $0.rssiValue < $1.rssiValue }) {
                         NSLog("Wifi Usage: Hotspot \(ssid) nach \(tries) Suchen gefunden")
                         if known {
                             let failure = CoreWiFi.joinKnown(ssid)
@@ -1456,10 +1465,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     }
 
     @objc func openSettings() {
+        let isNew = settingsWindow == nil
         show(&settingsWindow, title: L("Einstellungen", "Settings"),
              size: NSSize(width: 480, height: 640), resizable: false) { SettingsView() }
-        // Beim Schließen verwerfen: nächstes Öffnen startet frisch, aufgedeckte Passwörter sind weg.
-        if let w = settingsWindow {
+        // Beim Schließen verwerfen: nächstes Öffnen startet frisch (Beobachter nur einmal je Fenster).
+        if isNew, let w = settingsWindow {
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
                 self?.settingsWindow = nil
             }
@@ -2710,8 +2720,8 @@ enum Log {
     static func prune() {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Datenmonitor/widget.err.log")
-        guard let h = try? FileHandle(forUpdating: url), let data = try? h.readToEnd(),
-              let text = String(data: data, encoding: .utf8) else { return }
+        guard let h = try? FileHandle(forUpdating: url), let data = try? h.readToEnd() else { return }
+        let text = String(decoding: data, as: UTF8.self)   // auch bei kaputten Bytes kürzen
         defer { try? h.close() }
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
         let cutoff = f.string(from: Date().addingTimeInterval(-Double(keepDays) * 86_400))
