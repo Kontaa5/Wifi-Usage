@@ -1108,17 +1108,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         return it
     }
 
-    func sectionHeader(_ title: String) -> NSMenuItem {
-        if #available(macOS 14.0, *) { return NSMenuItem.sectionHeader(title: title) }
-        return info(title, header: true)
-    }
-
-    func info(_ title: String, header: Bool = false) -> NSMenuItem {
-        let it = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        it.isEnabled = !header   // Überschriften grau, Werte normal lesbar
-        return it
-    }
-
     func action(_ title: String, _ sel: Selector, key: String = "") -> NSMenuItem {
         let it = NSMenuItem(title: title, action: sel, keyEquivalent: key)
         it.target = self
@@ -2664,7 +2653,6 @@ enum Autostart {
     static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist")
     }
-    static var isEnabled: Bool { FileManager.default.fileExists(atPath: plistURL.path) }
 
     /// Pfad, der Updates überlebt: aus Homebrews versioniertem Cellar-Pfad wird der feste opt-Pfad.
     static var executablePath: String {
