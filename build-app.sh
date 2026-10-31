@@ -8,8 +8,8 @@
 #
 set -eu
 
-VERSION="2.10.2"
-BUILD="20"
+VERSION="2.10.3"
+BUILD="21"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="${1:?Ziel angeben, z. B. ./build-app.sh \"\$HOME/Applications/Wifi Usage.app\"}"
@@ -56,9 +56,11 @@ PLIST
 # kann sich als Wifi Usage ausgeben; nach jedem Update fragt macOS einmal neu.
 # --dev: Freigabe hängt nur an der Bundle-ID und bleibt über Neubauten erhalten (keine Abfrage bei
 # jedem Build; dafür könnte sich ein Programm mit derselben ID als Wifi Usage ausgeben).
+# Entitlement „Ortungsdienste“: ohne fragt macOS unter Hardened Runtime nie nach der Freigabe.
+ENT="$SRC_DIR/WifiUsage.entitlements"
 if [ "$DEV" = "--dev" ]; then
-  codesign --force --sign - --options runtime --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
+  codesign --force --sign - --options runtime --entitlements "$ENT" --requirements '=designated => identifier "at.datenmonitor.widget"' "$APP"
 else
-  codesign --force --sign - --options runtime "$APP"
+  codesign --force --sign - --options runtime --entitlements "$ENT" "$APP"
 fi
 echo "Gebaut: $APP (Version $VERSION)"
