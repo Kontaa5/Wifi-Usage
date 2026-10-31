@@ -3,8 +3,8 @@ class WifiUsage < Formula
   homepage "https://github.com/Kontaa5/Wifi-Usage"
   license "PolyForm-Noncommercial-1.0.0"
   url "https://github.com/Kontaa5/Wifi-Usage.git",
-      tag:      "v2.10.1",
-      revision: "96821b1ef12073ad54b69f70e2ec62056a30a42b"
+      tag:      "v2.10.2",
+      revision: "056f12a84b129e6d60f2f5edb8de0e1a52681b7e"
 
   depends_on :macos
 
