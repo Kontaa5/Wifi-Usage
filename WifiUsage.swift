@@ -204,7 +204,7 @@ final class Storage {
             let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HHmmss"
             let keep = fileURL.deletingLastPathComponent().appendingPathComponent("usage.unlesbar-\(f.string(from: Date())).json")
             try? FileManager.default.moveItem(at: fileURL, to: keep)
-            NSLog("Wifi Usage: usage.json nicht lesbar, gesichert als \(keep.lastPathComponent)")
+            NSLog("%@", "Wifi Usage: usage.json nicht lesbar, gesichert als \(keep.lastPathComponent)")
             return
         }
         store = s
@@ -797,7 +797,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         // Ortungsdienste: nur nötig, damit macOS den WLAN-Namen herausgibt.
         location.delegate = self
         Prefs.shared.locationGranted = locationGranted
-        NSLog("Wifi Usage: Start, Ortungsstatus \(location.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
+        NSLog("%@", "Wifi Usage: Start, Ortungsstatus \(location.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
         if location.authorizationStatus == .notDetermined {
             NSApp.activate(ignoringOtherApps: true)
             location.requestWhenInUseAuthorization()
@@ -851,7 +851,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        NSLog("Wifi Usage: Ortungsstatus \(manager.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
+        NSLog("%@", "Wifi Usage: Ortungsstatus \(manager.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
         Prefs.shared.locationGranted = locationGranted
         refresh(); scanAsync()
     }
@@ -1160,10 +1160,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         if row.known && !askAgain.contains(ssid) {
             connect(ssid, attempt: {
                 let failure = CoreWiFi.joinKnown(ssid)
-                if let f = failure { NSLog("Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(f)") }
+                if let f = failure { NSLog("%@", "Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(f)") }
                 return failure
             }, retry: {
-                NSLog("Wifi Usage: \(ssid) nicht verbunden, neuer Versuch mit frischer Suche")
+                NSLog("%@", "Wifi Usage: \(ssid) nicht verbunden, neuer Versuch mit frischer Suche")
                 return CoreWiFi.joinKnown(ssid, freshScan: true)
             }, completion: { [weak self] joined, message in
                 guard let self = self, !joined, message != "Netz nicht in Reichweite" else { return }
@@ -1184,7 +1184,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         let known = knownNetworks.contains(ssid)
         connect(ssid, attempt: {
             let reply = RemoteHotspot.enable(phone.object)
-            NSLog("Wifi Usage: Hotspot \(ssid) " + (reply == nil ? "nicht geweckt" : "geweckt"))
+            NSLog("%@", "Wifi Usage: Hotspot \(ssid) " + (reply == nil ? "nicht geweckt" : "geweckt"))
             guard let iface = Wifi.iface else { return "WLAN nicht verfügbar" }
             // Bis zu 25 s gezielt suchen. Eine Suche scheitert sofort, solange der WLAN-Chip noch
             // mit einer anderen beschäftigt ist (z. B. der Menü-Suche) — dann kurz warten.
@@ -1197,18 +1197,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                     let found = try iface.scanForNetworks(withName: ssid, includeHidden: true)
                     // iPhone-Hotspots sind immer verschlüsselt: offenes Netz gleichen Namens = Fälschung
                     if let n = found.filter(\.needsCredentials).max(by: { $0.rssiValue < $1.rssiValue }) {
-                        NSLog("Wifi Usage: Hotspot \(ssid) nach \(tries) Suchen gefunden")
+                        NSLog("%@", "Wifi Usage: Hotspot \(ssid) nach \(tries) Suchen gefunden")
                         if known {
                             let failure = CoreWiFi.joinKnown(ssid)
                             if failure == nil { return nil }
-                            NSLog("Wifi Usage: Profil für \(ssid) abgelehnt (\(failure!)), versuche mit Passwort vom iPhone")
+                            NSLog("%@", "Wifi Usage: Profil für \(ssid) abgelehnt (\(failure!)), versuche mit Passwort vom iPhone")
                         }
                         do { try iface.associate(to: n, password: reply?.password); return nil }
                         catch { return error.localizedDescription }
                     }
                     Thread.sleep(forTimeInterval: 0.3)   // noch nicht da: gleich nochmal
                 } catch {
-                    NSLog("Wifi Usage: Suche nach \(ssid): \(error.localizedDescription)")
+                    NSLog("%@", "Wifi Usage: Suche nach \(ssid): \(error.localizedDescription)")
                     Thread.sleep(forTimeInterval: 1)   // WLAN-Chip belegt
                 }
             }
@@ -1325,7 +1325,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 return nil
             }
             catch {
-                NSLog("Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(error.localizedDescription)")
+                NSLog("%@", "Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(error.localizedDescription)")
                 // Gleich ein zweiter Versuch mit frischer Suche: Hotspots scheitern beim ersten
                 // Mal oft kurz (Funkband-Wechsel), ohne dass das Passwort falsch wäre.
                 if !fresh { return attempt(fresh: true) }
@@ -1360,7 +1360,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         joinAnimation = anim
         DispatchQueue.global(qos: .userInitiated).async {
             let started = Date()
-            NSLog("Wifi Usage: Wechsel zu \(ssid) gestartet (vorher: \(Wifi.iface?.ssid() ?? "kein WLAN"))")
+            NSLog("%@", "Wifi Usage: Wechsel zu \(ssid) gestartet (vorher: \(Wifi.iface?.ssid() ?? "kein WLAN"))")
             var lastMessage = attempt()
             var retried = false
             if lastMessage != nil, let retry = retry {   // sofort abgelehnt: gleich nachfassen
@@ -1376,7 +1376,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 if step == 10, !retried, let retry = retry { lastMessage = retry() ?? lastMessage }   // nach 5 s einmal nachfassen
                 Thread.sleep(forTimeInterval: 0.5)
             }
-            NSLog("Wifi Usage: Wechsel zu \(ssid) " + (joined ? "verbunden" : "nicht verbunden")
+            NSLog("%@", "Wifi Usage: Wechsel zu \(ssid) " + (joined ? "verbunden" : "nicht verbunden")
                   + String(format: " nach %.1f s", Date().timeIntervalSince(started))
                   + (generation != self.joinGeneration ? " (überholt)" : ""))
             RunLoop.main.perform(inModes: [.common]) {
@@ -2686,15 +2686,15 @@ enum Autostart {
             try FileManager.default.createDirectory(atPath: logs, withIntermediateDirectories: true)
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             try data.write(to: plistURL, options: .atomic)
-            NSLog("Wifi Usage: Autostart eingerichtet (\(executablePath))")
+            NSLog("%@", "Wifi Usage: Autostart eingerichtet (\(executablePath))")
         } catch {
-            NSLog("Wifi Usage: Autostart nicht einrichtbar: \(error.localizedDescription)")
+            NSLog("%@", "Wifi Usage: Autostart nicht einrichtbar: \(error.localizedDescription)")
         }
     }
 
     static func disable() {
         try? FileManager.default.removeItem(at: plistURL)
-        NSLog("Wifi Usage: Autostart entfernt")
+        NSLog("%@", "Wifi Usage: Autostart entfernt")
     }
 }
 

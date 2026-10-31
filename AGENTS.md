@@ -43,6 +43,7 @@ Repo: `github.com/Kontaa5/Wifi-Usage` (alter Name `WLAN-Consumption-Mac-Widget` 
 - **Evil-Twin-Schutz:** bei gesichertem Profil werden offene Netze gleichen Namens ignoriert.
 - **Umbenannte Netze:** gleiche BSSID + neuer Name → Statistik wird zusammengeführt, ab dann neuer Name. Nutzer können in der App nicht umbenennen.
 - **Private APIs** vor jedem Aufruf mit `responds(to:)` prüfen; `NSError**` als `AutoreleasingUnsafeMutablePointer` (sonst Absturz durch Doppel-Release).
+- **Log nur mit `NSLog("%@", text)`** – nie Text mit WLAN-Namen o. Ä. direkt als Formatstring (ein Netzname aus `%@%@…` brachte die App zum Absturz).
 - **Signatur:** ad hoc + Hardened Runtime. Release (Homebrew) an cdhash gebunden → macOS fragt nach jedem Update einmal neu nach Ortungsdiensten (nötig für den WLAN-Namen). `--dev` bindet nur an die Bundle-ID → keine Abfrage bei jedem Neubau.
 - **Autostart macht die App selbst** (Einstellung „Bei Anmeldung starten“, schreibt den LaunchAgent; Cellar-Pfad → opt-Pfad).
 - **Log:** `~/Library/Logs/…` wird nach 90 Tagen rollend gekürzt (beim Start + täglich, in place – launchd öffnet im Append-Modus).
@@ -74,6 +75,7 @@ Version `X.Y` oder `X.Y.Z` (Bugfix), Tag immer mit `v` davor (z. B. `v2.10.1`).
 - 2.9.x: Security-Audits, Absturz-Fix CoreWiFi, Akkuanzeige raus, Log-Aufbewahrung 90 Tage, Dev-/Release-Signatur.
 - 2.10: Audit mit `insurance-security` – Evil-Twin-Schutz, eigenes Icon, Datenschutz-Abschnitt im README.
 - 2.10.1: Aufräumen (toter Code, alte Handoff-Datei, `.DS_Store`), Screenshots neu.
+- 2.10.2: Security-Fix – Formatstring-Lücke in `NSLog` (bösartiger WLAN-Name → Absturz/Speicher im Log).
 
 ## Offen / nur Gabriel
 
