@@ -57,12 +57,15 @@ Repo: `github.com/Kontaa5/Wifi-Usage` (alter Name `WLAN-Consumption-Mac-Widget` 
 
 ## Release-Ablauf
 
+Version `X.Y` oder `X.Y.Z` (Bugfix), Tag immer mit `v` davor (z. B. `v2.10.1`).
+
 1. Code ändern, `VERSION`/`BUILD` in `build-app.sh` erhöhen.
 2. `./install-widget.sh` → lokal testen (läuft danach als LaunchAgent).
-3. Commit „Wifi Usage X.Y: …“, Tag `vX.Y`.
-4. Formel: `tag:` + `revision:` (SHA des Release-Commits) setzen, eigener Commit „Formel: wifi-usage X.Y“.
-5. Push nur auf Gabriels Ansage: `git push origin main vX.Y`.
-6. Danach Brew-Installation über HTTPS testen (tap, install, `wifi-usage` startet, uninstall, untap).
+3. `AGENTS.md` nachziehen: Zeile unter „Verlauf“, ggf. Dateitabelle und „Getroffene Entscheidungen“ – im selben Commit wie der Code.
+4. Commit „Wifi Usage X.Y[.Z]: …“, Tag `vX.Y[.Z]`.
+5. Formel: `tag:` + `revision:` (SHA des Release-Commits) setzen, eigener Commit „Formel: wifi-usage X.Y[.Z]“.
+6. Push nur auf Gabriels Ansage: `git push origin main vX.Y[.Z]`.
+7. Danach Brew-Installation über HTTPS testen (tap, install, `wifi-usage` startet, uninstall, untap).
 
 ## Verlauf (Kurzfassung)
 
