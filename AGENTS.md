@@ -45,6 +45,7 @@ Repo: `github.com/Kontaa5/Wifi-Usage` (alter Name `WLAN-Consumption-Mac-Widget` 
 - **Umbenannte Netze:** gleiche BSSID + neuer Name → Statistik wird zusammengeführt, ab dann neuer Name. Nutzer können in der App nicht umbenennen.
 - **Private APIs** vor jedem Aufruf mit `responds(to:)` prüfen; `NSError**` als `AutoreleasingUnsafeMutablePointer` (sonst Absturz durch Doppel-Release).
 - **Log nur mit `NSLog("%@", text)`** – nie Text mit WLAN-Namen o. Ä. direkt als Formatstring (ein Netzname aus `%@%@…` brachte die App zum Absturz).
+- **Datenlimit pro WLAN:** optional, pro Monat in GB, gesetzt in der Übersicht (Netz aufklappen). Hinweis an der Notch (aus AudioPilot): „Limit gesetzt“ / „Limit erreicht“ (einmal pro Monat + Netz). Popup-Ebene `.popUpMenu` – mit `.statusBar` liegt es im Vollbild unter dem schwarzen Notch-Streifen (Ebene 26). `NSAppSleepDisabled`, damit die 20-s-Messung im Hintergrund nicht gebremst wird.
 - **Signatur:** ad hoc + Hardened Runtime + Entitlement `personal-information.location` (ohne fragt macOS nie nach Ortungsdiensten – fiel nur nicht auf, weil alte Freigaben von vor 2.9 weiterliefen). Release (Homebrew) an cdhash gebunden → macOS fragt nach jedem Update einmal neu nach Ortungsdiensten (nötig für den WLAN-Namen). `--dev` bindet nur an die Bundle-ID → keine Abfrage bei jedem Neubau.
 - **Autostart macht die App selbst** (Einstellung „Bei Anmeldung starten“, schreibt den LaunchAgent; Cellar-Pfad → opt-Pfad).
 - **Log:** `~/Library/Logs/…` wird nach 90 Tagen rollend gekürzt (beim Start + täglich, in place – launchd öffnet im Append-Modus).
@@ -78,6 +79,7 @@ Version `X.Y` oder `X.Y.Z` (Bugfix), Tag immer mit `v` davor (z. B. `v2.10.1`).
 - 2.10.1: Aufräumen (toter Code, alte Handoff-Datei, `.DS_Store`), Screenshots neu.
 - 2.10.2: Security-Fix – Formatstring-Lücke in `NSLog` (bösartiger WLAN-Name → Absturz/Speicher im Log).
 - 2.10.3: Ortungsdienste-Entitlement – neue Installationen bekamen sonst nie die Abfrage (keine WLAN-Namen).
+- 2.11: Datenlimit pro WLAN mit Hinweis an der Notch (auch im Vollbild).
 
 ## Offen / nur Gabriel
 

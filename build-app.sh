@@ -8,8 +8,8 @@
 #
 set -eu
 
-VERSION="2.10.3"
-BUILD="21"
+VERSION="2.11"
+BUILD="22"
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="${1:?Ziel angeben, z. B. ./build-app.sh \"\$HOME/Applications/Wifi Usage.app\"}"
@@ -44,6 +44,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>              <string>$BUILD</string>
     <key>LSMinimumSystemVersion</key>       <string>13.0</string>
     <key>LSUIElement</key>                  <true/>
+    <!-- kein App Nap: sonst bremst macOS die 20-s-Messung, wenn kein Fenster sichtbar ist (z. B. im Vollbild) -->
+    <key>NSAppSleepDisabled</key>           <true/>
     <key>NSLocationUsageDescription</key>
     <string>macOS gibt den Namen des WLANs nur mit Ortungsdienste-Freigabe heraus. Der Standort selbst wird nicht verwendet.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

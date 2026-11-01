@@ -57,6 +57,8 @@ struct Store: Codable {
     var lastSeen: [String: Double] = [:]          // Netzname -> zuletzt verbunden (Unix-Zeit)
     var bssids: [String: String] = [:]            // Sender-MAC (BSSID) -> zuletzt gesehene SSID
     var renamed: [String: String] = [:]           // alter WLAN-Name -> neuer (Netz umbenannt)
+    var limits: [String: Double] = [:]            // Netzname -> Monatslimit in GB (optional, vom Nutzer gesetzt)
+    var limitHit: [String: String] = [:]          // Netzname -> Monat ("YYYY-MM"), in dem „Limit erreicht" kam
 
     init() {}
 
@@ -81,10 +83,12 @@ struct Store: Codable {
         for (m, v) in ssids where v == from { ssids[m] = ssid }   // nur per Router-MAC gezählte Altdaten
         if hotspots.contains(from), !hotspots.contains(ssid) { hotspots.append(ssid) }
         if let t = lastSeen.removeValue(forKey: from) { lastSeen[ssid] = max(t, lastSeen[ssid] ?? 0) }
+        if let l = limits.removeValue(forKey: from), limits[ssid] == nil { limits[ssid] = l }
+        if let h = limitHit.removeValue(forKey: from), limitHit[ssid] == nil { limitHit[ssid] = h }
     }
 
     // Tolerantes Einlesen: fehlende Felder -> Standardwert (kein Datenverlust bei Updates).
-    enum CodingKeys: String, CodingKey { case lastDown, lastUp, months, days, names, ssids, hotspots, sharedMACs, lastSeen, bssids, renamed }
+    enum CodingKeys: String, CodingKey { case lastDown, lastUp, months, days, names, ssids, hotspots, sharedMACs, lastSeen, bssids, renamed, limits, limitHit }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         lastDown = try c.decodeIfPresent(UInt64.self, forKey: .lastDown)
@@ -98,6 +102,8 @@ struct Store: Codable {
         lastSeen = try c.decodeIfPresent([String: Double].self, forKey: .lastSeen) ?? [:]
         bssids   = try c.decodeIfPresent([String: String].self, forKey: .bssids) ?? [:]
         renamed  = try c.decodeIfPresent([String: String].self, forKey: .renamed) ?? [:]
+        limits   = try c.decodeIfPresent([String: Double].self, forKey: .limits) ?? [:]
+        limitHit = try c.decodeIfPresent([String: String].self, forKey: .limitHit) ?? [:]
     }
 }
 
@@ -690,7 +696,37 @@ enum Meter {
     static func usage(period: Period, name: String) -> Usage {
         grouped(period: period).first { $0.name == name }?.usage ?? Usage()
     }
+
+    /// Monatslimit setzen (nil = entfernen). Neues Limit meldet sich an der Notch und kann
+    /// in diesem Monat erneut „erreicht" melden.
+    static func setLimit(_ gb: Double?, for name: String) {
+        let st = Storage.shared
+        st.store.limits[name] = gb
+        st.store.limitHit[name] = nil
+        st.save()
+        if let gb = gb {
+            NotchPopup.shared.show(symbol: "gauge.with.dots.needle.67percent", title: L("Limit gesetzt", "Limit set"),
+                                   subtitle: name + " · " + limitText(gb))
+            // schon darüber: gleich melden, nicht erst bei der nächsten Messung
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { checkLimit(name) }
+        }
+    }
+
+    /// Limit des Netzes in diesem Monat erreicht und noch nicht gemeldet? Dann als gemeldet merken
+    /// und an der Notch melden.
+    static func checkLimit(_ name: String) {
+        let st = Storage.shared, month = monthKey()
+        guard let lim = st.store.limits[name], st.store.limitHit[name] != month,
+              gbValue(usage(month: month, name: name).total) >= lim else { return }
+        st.store.limitHit[name] = month
+        st.save()
+        NotchPopup.shared.show(symbol: "exclamationmark.triangle.fill", title: L("Limit erreicht", "Limit reached"),
+                               subtitle: name + " · " + limitText(lim), duration: 10)
+    }
 }
+
+/// Limit als Text: „10 GB", „2.5 GB".
+func limitText(_ gb: Double) -> String { String(format: "%g GB", gb) }
 
 /// Zeitraum der Übersicht: ein Monat ("2026-10") oder ein Jahr ("2026").
 struct Period: Equatable {
@@ -1474,6 +1510,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
 
     @objc func refresh() {
         Meter.sample(); updateTitle()
+        if let net = Meter.currentNet { Meter.checkLimit(net.name) }
         if overviewWindow?.isVisible == true { overview.reload() }
     }
 }
@@ -2098,6 +2135,8 @@ struct NetworkList: View {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { index, n in
                     let frac = total > 0 ? Double(n.usage.total) / Double(total) : 0
                     VStack(alignment: .leading, spacing: 6) {
+                      // Klick auf Kopf + Balken klappt auf; das Detail selbst bleibt bedienbar (Limit-Feld)
+                      VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
                             Circle().fill(colors.color(n.name)).frame(width: 8, height: 8)
                             Text(n.name).lineLimit(1).truncationMode(.middle)
@@ -2127,6 +2166,12 @@ struct NetworkList: View {
                             }
                         }
                         .frame(height: 6)
+                      }
+                      .contentShape(Rectangle())
+                      .onTapGesture {
+                          withAnimation(.easeInOut(duration: 0.2)) { expanded = expanded == n.name ? nil : n.name }
+                      }
+                      .help(L("Klicken für Details", "Click for details"))
 
                         if expanded == n.name {
                             NetworkDetail(period: period, net: n, color: colors.color(n.name))
@@ -2139,11 +2184,6 @@ struct NetworkList: View {
                     // spätere Zeilen liegen oben und decken das Detail während der Animation ab
                     .background(Color(nsColor: .controlBackgroundColor))
                     .zIndex(Double(index))
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.2)) { expanded = expanded == n.name ? nil : n.name }
-                    }
-                    .help(L("Klicken für Details", "Click for details"))
                 }
                 if hidden > 0 {
                     Text(hidden == 1 ? L("+ 1 Netz unter 0.01 GB", "+ 1 network under 0.01 GB")
@@ -2260,6 +2300,9 @@ struct NetworkDetail: View {
                 .frame(height: 90)
             }
 
+            Divider()
+            LimitRow(name: net.name)
+
             if partial {
                 let since = firstDay.map(shortDate) ?? "–"
                 Text(L("* Pro Tag wird erst seit \(since) gezählt. \(String(format: "%.2f GB", unassigned)) dieses Monats liegen davor und sind keinem Tag zugeordnet – diese Werte beziehen sich nur auf die erfassten Tage.",
@@ -2286,6 +2329,58 @@ extension NetworkDetail {
             return shortDate(d) + ", " + time
         }
         return days.last.map { shortDate($0.date) } ?? "–"
+    }
+}
+
+/// Optionales Monatslimit eines Netzes: setzen, ändern, entfernen. Erreicht -> Hinweis an der Notch.
+struct LimitRow: View {
+    let name: String
+    @State private var text = ""
+    @State private var changed = 0   // nach Setzen/Entfernen neu zeichnen
+
+    var body: some View {
+        let _ = changed
+        let limit = Storage.shared.store.limits[name]
+        let used = gbValue(Meter.usage(month: Meter.monthKey(), name: name).total)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Label(L("Monatslimit", "Monthly limit"), systemImage: "gauge.with.dots.needle.67percent")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                TextField(limit.map { String(format: "%g", $0) } ?? L("keins", "none"), text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 70)
+                    .onSubmit(set)
+                Text("GB").foregroundStyle(.secondary)
+                Button(L("Setzen", "Set"), action: set).disabled(parsed == nil)
+                if limit != nil {
+                    Button(L("Entfernen", "Remove")) { Meter.setLimit(nil, for: name); text = ""; changed += 1 }
+                }
+            }
+            if let limit = limit {
+                ProgressView(value: min(used / limit, 1))
+                    .tint(used >= limit ? .red : .accentColor)
+                Text(String(format: L("%.2f von %@ diesen Monat (%.0f %%)", "%.2f of %@ this month (%.0f %%)"),
+                            used, limitText(limit), used / limit * 100))
+                    .font(.caption).monospacedDigit()
+                    .foregroundStyle(used >= limit ? Color.red : Color.secondary)
+            }
+        }
+    }
+
+    /// Eingabe als GB (Komma oder Punkt), nur sinnvolle Werte.
+    private var parsed: Double? {
+        let t = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        guard let v = Double(t), v.isFinite, v > 0, v <= 100_000 else { return nil }
+        return v
+    }
+
+    private func set() {
+        guard let v = parsed else { return }
+        Meter.setLimit(v, for: name)
+        text = ""
+        changed += 1
     }
 }
 
@@ -2642,6 +2737,131 @@ struct CoffeeView: View {
         }
         .padding(24)
         .frame(width: 380)
+    }
+}
+
+// MARK: - Hinweis an der Notch (wie AudioPilot)
+/// Schwarzes Popup, für das die Notch seitlich aufgeht (wie macOS „Stromsparmodus"): links Symbol +
+/// Titel, rechts Text. Liegt über allen Spaces, auch über Vollbild-Fenstern. Ohne Notch: oben mittig.
+/// Das Fenster hat gleich die Endgröße; die Form selbst federt in SwiftUI aus der Notch auf und wieder zu.
+final class NotchPopup {
+    static let shared = NotchPopup()
+    private var panel: NSPanel?
+    private var model: NotchModel?
+    private var hideWork: DispatchWorkItem?
+
+    func show(symbol: String, title: String, subtitle: String, duration: Double = 6) {
+        hide(animated: false)
+        guard let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main else { return }
+        let notch = max(screen.safeAreaInsets.top, 32)
+        var notchWidth: CGFloat = 200
+        if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea {
+            notchWidth = min(max(screen.frame.width - l.width - r.width, 120), 300)
+        }
+        let m = NotchModel(notch: NSSize(width: notchWidth, height: notch),
+                           open: NSSize(width: notchWidth + 2 * NotchModel.wing, height: notch))
+        let view = NotchPopupView(model: m, symbol: symbol, title: title, subtitle: subtitle)
+        // Platz für Schultern und Schatten rundherum.
+        let size = NSSize(width: m.open.width + 2 * NotchModel.shoulder + 40, height: m.open.height + 24)
+        let p = NSPanel(contentRect: NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height,
+                                            width: size.width, height: size.height),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        // Über dem schwarzen Notch-Streifen, den macOS im Vollbild oben einblendet (Ebene 26) —
+        // .statusBar (25) läge darunter und wäre im Vollbild unsichtbar.
+        p.level = .popUpMenu
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = false
+        p.ignoresMouseEvents = true   // reiner Hinweis, Klicks gehen durch
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        p.contentView = NSHostingView(rootView: view)
+        p.orderFrontRegardless()
+        panel = p
+        model = m
+        DispatchQueue.main.async { withAnimation(.spring(response: 0.5, dampingFraction: 0.72)) { m.isOpen = true } }
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+    }
+
+    func hide(animated: Bool = true) {
+        hideWork?.cancel()
+        guard let p = panel else { return }
+        panel = nil
+        let m = model
+        model = nil
+        guard animated, let m = m else { p.orderOut(nil); return }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { m.isOpen = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { p.orderOut(nil) }
+    }
+}
+
+final class NotchModel: ObservableObject {
+    static let shoulder: CGFloat = 8
+    static let wing: CGFloat = 215   // Breite links/rechts neben der Notch
+    let notch: NSSize, open: NSSize
+    @Published var isOpen = false
+    init(notch: NSSize, open: NSSize) { self.notch = notch; self.open = open }
+}
+
+/// Notch-Form: oben nach außen geschwungene Schultern, die in die Bildschirmkante übergehen, unten große Rundung.
+struct NotchShape: Shape {
+    var shoulder: CGFloat
+    var radius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(shoulder, radius) }
+        set { shoulder = newValue.first; radius = newValue.second }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let s = shoulder, w = rect.width, h = rect.height
+        let r = min(radius, (w - 2 * s) / 2, h - s)
+        var p = Path()
+        p.move(to: CGPoint(x: 0, y: 0))
+        p.addQuadCurve(to: CGPoint(x: s, y: s), control: CGPoint(x: s, y: 0))
+        p.addLine(to: CGPoint(x: s, y: h - r))
+        p.addQuadCurve(to: CGPoint(x: s + r, y: h), control: CGPoint(x: s, y: h))
+        p.addLine(to: CGPoint(x: w - s - r, y: h))
+        p.addQuadCurve(to: CGPoint(x: w - s, y: h - r), control: CGPoint(x: w - s, y: h))
+        p.addLine(to: CGPoint(x: w - s, y: s))
+        p.addQuadCurve(to: CGPoint(x: w, y: 0), control: CGPoint(x: w - s, y: 0))
+        p.closeSubpath()
+        return p.offsetBy(dx: rect.minX, dy: rect.minY)
+    }
+}
+
+struct NotchPopupView: View {
+    @ObservedObject var model: NotchModel
+    let symbol: String, title: String, subtitle: String
+
+    var body: some View {
+        let open = model.isOpen
+        let size = open ? model.open : model.notch
+        let s = NotchModel.shoulder
+        ZStack(alignment: .top) {
+            NotchShape(shoulder: s, radius: min(14, model.notch.height / 2.4))
+                .fill(.black)
+                .frame(width: size.width + 2 * s, height: size.height)
+                .shadow(color: .black.opacity(open ? 0.3 : 0), radius: 8, y: 2)
+            HStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(.white)
+                    Text(verbatim: title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                }
+                .frame(width: NotchModel.wing - 18, alignment: .leading)
+                Spacer(minLength: model.notch.width)
+                Text(verbatim: subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1).truncationMode(.middle)
+                    .frame(width: NotchModel.wing - 18, alignment: .trailing)
+            }
+            .padding(.horizontal, 18)
+            .frame(width: model.open.width, height: model.notch.height)
+            .opacity(open ? 1 : 0)
+            .blur(radius: open ? 0 : 4)
+            .animation(open ? .easeOut(duration: 0.25).delay(0.12) : .easeIn(duration: 0.1), value: open)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
