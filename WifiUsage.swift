@@ -168,6 +168,21 @@ final class Prefs: ObservableObject {
     @Published var instantHotspot = UserDefaults.standard.object(forKey: "instantHotspot") as? Bool ?? true {
         didSet { UserDefaults.standard.set(instantHotspot, forKey: "instantHotspot"); onChange?() }
     }
+    /// Gesperrte WLANs: Wifi Usage verbindet nie mit ihnen und trennt, falls macOS es selbst tut.
+    @Published var blocked = UserDefaults.standard.stringArray(forKey: "blockedNetworks") ?? [] {
+        didSet { UserDefaults.standard.set(blocked, forKey: "blockedNetworks"); onChange?() }
+    }
+    /// Entwicklermodus: jeden einzelnen Sender (BSSID) im Menü, nicht nur nach Namen gruppiert.
+    @Published var developerMode = UserDefaults.standard.bool(forKey: "developerMode") {
+        didSet { UserDefaults.standard.set(developerMode, forKey: "developerMode"); onChange?() }
+    }
+    func isBlocked(_ ssid: String) -> Bool { blocked.contains(ssid) }
+    /// WLAN ohne Gateway/Route (laut macOS) nach so vielen Sekunden verlassen, 0 = nie.
+    /// Einstellbar nur im Entwicklermodus; sonst gilt immer 30 s.
+    @Published var failoverSetting = UserDefaults.standard.object(forKey: "failoverDelay") as? Int ?? 30 {
+        didSet { UserDefaults.standard.set(failoverSetting, forKey: "failoverDelay"); onChange?() }
+    }
+    var failoverDelay: Double { Double(developerMode ? failoverSetting : 30) }
 
     var isGerman: Bool {
         switch language {
@@ -187,6 +202,7 @@ var unknownName: String { L("Unbekanntes WLAN", "Unknown Wi-Fi") }
 enum Actions {
     static var openSettings: () -> Void = {}
     static var openLocationSettings: () -> Void = {}
+    static var networkNames: () -> [String] = { [] }   // gespeicherte + in Reichweite (zum Sperren)
 }
 
 // MARK: - Persistenz
@@ -342,6 +358,25 @@ enum Wifi {
     }
 }
 
+// MARK: - Laufende Menü-Suche
+/// Läuft gerade die Netzsuche fürs Menü? Solange blockiert sie den WLAN-Chip: eigene Suchen scheitern
+/// mit „Resource busy", Verbinden mit „tmpErr" (Log 2.11/2.12). Darum warten Verbindungsversuche
+/// kurz, bis sie fertig ist — ihr Ergebnis steht danach ohnehin im System-Zwischenspeicher.
+/// Wird von Hintergrund-Threads gelesen, daher mit Sperre.
+enum MenuScan {
+    private static let lock = NSLock()
+    private static var _running = false
+    static var running: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _running }
+        set { lock.lock(); _running = newValue; lock.unlock() }
+    }
+    /// Blockiert (nur im Hintergrund aufrufen), bis die Suche fertig ist, höchstens `max` Sekunden.
+    static func waitUntilIdle(max: Double = 10) {
+        let start = Date()
+        while running && Date().timeIntervalSince(start) < max { Thread.sleep(forTimeInterval: 0.2) }
+    }
+}
+
 // MARK: - Apples interne WLAN-Schnittstelle (CoreWiFi)
 /// Dieselbe Schnittstelle, die Apples WLAN-Menü nutzt: verbindet mit gespeicherten Netzen über
 /// deren Profil — ohne Passwort- oder Admin-Abfrage. Die öffentliche API (CoreWLAN) verlangt
@@ -351,6 +386,7 @@ enum CoreWiFi {
     private typealias ObjFn = @convention(c) (AnyObject, Selector, AnyObject, AutoreleasingUnsafeMutablePointer<NSError?>?) -> AnyObject?
     private typealias BoolFn = @convention(c) (AnyObject, Selector, AnyObject, AutoreleasingUnsafeMutablePointer<NSError?>?) -> Bool
     private typealias SetBoolFn = @convention(c) (AnyObject, Selector, Bool) -> Void
+    private typealias SetU64Fn = @convention(c) (AnyObject, Selector, UInt64) -> Void
 
     private static let loaded = dlopen("/System/Library/PrivateFrameworks/CoreWiFi.framework/CoreWiFi", RTLD_NOW) != nil
 
@@ -393,6 +429,30 @@ enum CoreWiFi {
         return String(d[r].dropFirst("security=".count)).lowercased()
     }
 
+    /// Gezielte Suche nach einem (auch versteckten) Netz, ohne Zwischenspeicher. Nötig für frisch
+    /// geweckte iPhone-Hotspots: Sie senden versteckt (normale Suche sieht sie nie), und eine
+    /// CoreWLAN-Suche liefert bis zu ~13 s lang das gemerkte Ergebnis einer zu frühen Suche („leer").
+    /// Live gemessen (2.12): Hotspot nach 3,7 s gefunden, nach 6,8 s verbunden statt 15–17 s.
+    /// true = gefunden (steht danach im System-Zwischenspeicher), nil = Schnittstelle fehlt.
+    static func scanFresh(_ ssid: String) -> Bool? {
+        guard let i = makeInterface(), let cParams = NSClassFromString("CWFScanParameters") as? NSObject.Type else { return nil }
+        let p = cParams.init()
+        guard p.supports("setSSID:", "setIncludeHiddenNetworks:", "setAcceptableCacheAge:", "setMaximumAge:") else { return nil }
+        _ = p.perform(NSSelectorFromString("setSSID:"), with: ssid as NSString)   // NSData scheitert („helper application")
+        let hidden = NSSelectorFromString("setIncludeHiddenNetworks:")
+        unsafeBitCast(p.method(for: hidden), to: SetBoolFn.self)(p, hidden, true)
+        for name in ["setAcceptableCacheAge:", "setMaximumAge:"] {
+            let sel = NSSelectorFromString(name)
+            unsafeBitCast(p.method(for: sel), to: SetU64Fn.self)(p, sel, 0)
+        }
+        var error: NSError?
+        let scanSel = NSSelectorFromString("performScanWithParameters:error:")
+        let found = unsafeBitCast(i.method(for: scanSel), to: ObjFn.self)(i, scanSel, p, &error)
+        if i.responds(to: NSSelectorFromString("invalidate")) { _ = i.perform(NSSelectorFromString("invalidate")) }
+        // Hotspots sind verschlüsselt: offener Sender gleichen Namens zählt nicht (Evil Twin)
+        return list(found).contains { name($0) == ssid && ($0.safeValue("isOpen") as? Bool) != true }
+    }
+
     /// Gespeichertes Netz verbinden. nil = Auftrag angenommen, sonst Fehlertext.
     static func joinKnown(_ ssid: String, freshScan: Bool = false) -> String? {
         guard let i = makeInterface(),
@@ -400,6 +460,7 @@ enum CoreWiFi {
               let cAssoc = NSClassFromString("CWFAssocParameters") as? NSObject.Type else {
             return "CoreWiFi nicht verfügbar"
         }
+        MenuScan.waitUntilIdle()
         // 1) gespeichertes Profil zum Namen
         let profiles = list(i.perform(NSSelectorFromString("knownNetworkProfilesWithProperties:"), with: nil)?.takeUnretainedValue())
         guard let profile = profiles.first(where: { name($0) == ssid }) else { return "Kein gespeichertes Profil" }
@@ -476,6 +537,7 @@ final class RemoteHotspot: NSObject {
     func stop() {
         _ = session?.perform(NSSelectorFromString("stopBrowsing"))
         session = nil
+        devices = [:]   // Geräte-Objekte gehören zur beendeten Suche; Wecken damit schlug im Test fehl
     }
 
     @objc(session:updatedFoundDevices:)
@@ -542,6 +604,8 @@ enum NetID {
     // dem Verbinden oder nach Ablauf des Caches manchmal nichts — dann nicht auf einen
     // anderen Schlüssel ausweichen (das hat früher die Statistik zerstückelt).
     private static var sticky: (gw: String, ip: String, mac: String, ssid: String?)?
+    /// Gateway und Router-MAC der laufenden Verbindung (Entwicklermodus).
+    static var router: (gw: String, mac: String)? { sticky.map { ($0.gw, $0.mac) } }
 
     /// iPhone-Hotspots vergeben immer 172.20.10.x, Android meist 192.168.43.1.
     static func isHotspotGateway(_ gw: String?) -> Bool {
@@ -791,6 +855,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     let location = CLLocationManager()
     var timer: Timer?
     var inRange: [String: Seen] = [:]  // SSID -> Ergebnis der letzten Suche
+    var radios: [Radio] = []           // jeder einzelne Sender der letzten Suche (Entwicklermodus)
+    var showRadios = false             // „Alle Sender" aufgeklappt?
+    var lastScan: Date?                // Ende der letzten Menü-Suche
+    var manualChoice: String?          // im Menü selbst gewählt: bleibt auch ohne Internet (Fehlersuche)
+    var brokenSince: (ssid: String, since: Date)?   // seit wann das aktuelle WLAN keinen Ausgang hat
+    var leftBroken: [String: Date] = [:]            // wegen fehlenden Ausgangs verlassen (5 min nicht zurück)
     var scanning = false
     weak var openMenu: NSMenu?         // gerade offenes Menü
     var showOthers = false             // „Andere Netzwerke" aufgeklappt?
@@ -829,6 +899,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         Prefs.shared.onChange = { [weak self] in self?.prefsChanged() }
         Actions.openSettings = { [weak self] in self?.openSettings() }
         Actions.openLocationSettings = { [weak self] in self?.openLocationSettings() }
+        Actions.networkNames = { [weak self] in
+            guard let self = self else { return [] }
+            return Array(self.knownNetworks.union(self.inRange.keys).union(RemoteHotspot.shared.devices.keys)).sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        }
 
         // Ortungsdienste: nur nötig, damit macOS den WLAN-Namen herausgibt.
         location.delegate = self
@@ -845,6 +920,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 guard let self = self else { return }
                 self.wifiPathOK = path.status == .satisfied
                 self.updateTitle()
+                self.enforceBlock()   // Netzwechsel: gleich prüfen, nicht erst bei der nächsten Messung
+                self.checkBroken()
                 if self.openMenu != nil { self.updatePanel() }
             }
         }
@@ -889,11 +966,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         NSLog("%@", "Wifi Usage: Ortungsstatus \(manager.authorizationStatus.rawValue), SSID \(Wifi.iface?.ssid() == nil ? "nicht lesbar" : "lesbar")")
         Prefs.shared.locationGranted = locationGranted
-        refresh(); scanAsync()
+        refresh(); scanAsync(force: true)
     }
 
     func prefsChanged() {
         updateTitle()
+        enforceBlock()   // gerade das verbundene Netz gesperrt?
+        if openMenu != nil { updatePanel() }
         overview.reload()
         overviewWindow?.title = L("Wifi Usage – Übersicht", "Wifi Usage – Overview")
         settingsWindow?.title = L("Einstellungen", "Settings")
@@ -1061,6 +1140,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             self?.showOthers = open
             if open { self?.scanAsync() }
         }
+        p.onToggleRadios = { [weak self] open in
+            self?.showRadios = open
+            if open { self?.scanAsync() }
+        }
         p.onActivity = { [weak self] in self?.noteActivity() }
         menu.addItem(viewItem(p))
         panel = p
@@ -1087,6 +1170,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         c.scanning = scanning
         if c.wifiOn {
             let net = Meter.currentNet
+            let live = Wifi.iface?.ssid()   // Funk schon verbunden, Messung weiß es evtl. noch nicht
+            let dev = Prefs.shared.developerMode
             let month = Meter.monthKey()
             let known = knownNetworks
             // verbundenes zuerst, dann bekannte in Reichweite (stärkstes Signal zuerst)
@@ -1096,29 +1181,35 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             let phoneNames = phones.keys.sorted()
             names.removeAll { phones[$0] != nil }
             names.insert(contentsOf: phoneNames, at: 0)
-            if let cur = net?.name { names.removeAll { $0 == cur }; names.insert(cur, at: 0) }
+            if let cur = net?.name ?? live { names.removeAll { $0 == cur }; names.insert(cur, at: 0) }
 
             func row(_ ssid: String, known: Bool) -> RowInfo {
                 let phone = phones[ssid]
-                let connected = ssid == net?.name
+                let connected = ssid == (net?.name ?? live)
+                let blocked = Prefs.shared.isBlocked(ssid)
                 let u = Meter.usage(month: month, name: ssid)
                 let rssi = inRange[ssid]?.rssi ?? (connected ? Wifi.iface?.rssiValue() : nil)
                 let detail = ssid == joining ? nil   // Warte-Kreis statt Text, wie bei Apple
                     : ssid == failed ? failedReason
+                    : blocked ? L("Gesperrt", "Blocked")
                     : (connected || u.total > 0) && known ? gb(u.total) : nil
                 let offline = connected && noInternet
                 let phoneInfo = phone.map { p in
                     // kein Akku: der Wert vom iPhone ist grob/veraltet (zeigte immer „75 %“), das wäre irreführend
                     [L("Hotspot", "Hotspot"), p.network].compactMap { $0 }.joined(separator: " · ")
                 }
+                // Entwicklermodus: beim verbundenen Netz Gateway und Sender (BSSID)
+                let devInfo = dev && connected
+                    ? [NetID.router.map { "GW " + $0.gw }, Wifi.iface?.bssid()].compactMap { $0 }.joined(separator: " · ") : ""
                 return RowInfo(ssid: ssid, detail: detail,
-                               symbol: offline ? "wifi.exclamationmark" : phone != nil || NetID.isHotspot(ssid) ? "personalhotspot" : "wifi",
+                               symbol: blocked ? "nosign" : offline ? "wifi.exclamationmark" : phone != nil || NetID.isHotspot(ssid) ? "personalhotspot" : "wifi",
                                signal: rssi.map { Wifi.level($0) }, connected: connected,
                                secure: inRange[ssid]?.secure ?? true, known: known,
-                               tooltip: u.total > 0 ? "↓ \(gb(u.down))   ↑ \(gb(u.up)) " + L("diesen Monat", "this month") : nil,
+                               tooltip: dev && connected ? NetID.router.map { L("Router-MAC ", "Router MAC ") + $0.mac }
+                                   : u.total > 0 ? "↓ \(gb(u.down))   ↑ \(gb(u.up)) " + L("diesen Monat", "this month") : nil,
                                joining: ssid == joining,
                                subtitle: offline ? L("Keine Internetverbindung", "No internet connection")
-                                   : phoneInfo)
+                                   : !devInfo.isEmpty ? devInfo : phoneInfo)
             }
             // Eine Liste: verbundenes, eigene iPhones (Instant Hotspot), dann in Reichweite
             // (stärkstes Signal) — Hotspots mit Ketten-Symbol.
@@ -1127,12 +1218,29 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 c.knownHint = scanning ? L("Suche nach Netzwerken …", "Searching for networks …")
                                        : L("Keine bekannten Netzwerke in Reichweite", "No known networks in range")
             }
-            c.others = inRange.filter { !known.contains($0.key) && $0.key != net?.name && phones[$0.key] == nil }
+            c.others = inRange.filter { !known.contains($0.key) && $0.key != (net?.name ?? live) && phones[$0.key] == nil }
                 .sorted { $0.value.rssi > $1.value.rssi }.map { row($0.key, known: false) }
             if c.others.isEmpty {
                 c.othersHint = !locationGranted ? L("Ortungsdienste nötig, um Netze zu finden", "Location Services needed to find networks")
                     : scanning ? L("Suche nach Netzwerken …", "Searching for networks …")
                     : L("Keine weiteren Netzwerke", "No other networks")
+            }
+            if dev {
+                // Jeder Sender einzeln (nicht nach Namen gruppiert), stärkster zuerst. Klick kopiert die BSSID.
+                let ownBSSID = Wifi.iface?.bssid()
+                c.radios = radios.map { r in
+                    let id = r.bssid ?? "?"
+                    let band = r.band.map { ($0 == "2.4" ? L("2,4", "2.4") : $0) + " GHz" }
+                    let info = [r.bssid ?? L("BSSID unbekannt", "BSSID unknown"),
+                                r.channel.map { L("Kanal ", "Ch ") + String($0) }, band, "\(r.rssi) dBm"]
+                        .compactMap { $0 }.joined(separator: " · ")
+                    return RowInfo(ssid: r.ssid ?? L("(verstecktes Netz)", "(hidden network)"),
+                                   detail: id == failed ? failedReason : nil, symbol: "wifi",
+                                   signal: Wifi.level(r.rssi), connected: r.bssid != nil && r.bssid == ownBSSID,
+                                   secure: r.secure, known: false, tooltip: nil,
+                                   subtitle: info, copyText: r.bssid)
+                }
+                c.radiosExpanded = showRadios
             }
         }
         panel.update(c)
@@ -1151,18 +1259,24 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     }
 
     // Netzsuche im Hintergrund (liefert SSIDs nur mit Ortungsdienste-Freigabe).
-    func scanAsync(retries: Int = 0) {
+    func scanAsync(retries: Int = 0, force: Bool = false) {
         // nicht während eines Wechsels: die Suche blockiert sonst den WLAN-Chip für den Wechsel
         guard !scanning, joining == nil, locationGranted, let iface = Wifi.iface, iface.powerOn() else { return }
+        // Menü kurz hintereinander geöffnet: letzte Suche (< 10 s) reicht — jede Suche hält den Chip
+        // mehrere Sekunden fest, ein Klick auf ein Netz müsste sonst darauf warten.
+        if !force, retries == 0, let last = lastScan, Date().timeIntervalSince(last) < 10 { return }
         scanning = true
+        MenuScan.running = true
         if openMenu != nil { updatePanel() }   // Warte-Kreis „sucht" oben im Menü
         DispatchQueue.global(qos: .utility).async {
             let known = Set(Sys.preferredNetworks(iface.interfaceName ?? Sys.wifiInterface()))
             // Nur die frische Suche: Der System-Zwischenspeicher enthält auch Netze, die längst außer
             // Reichweite sind. Kurzes Flackern schwacher Netze fängt das 30-s-Behalten unten ab.
             let fresh = (try? iface.scanForNetworks(withSSID: nil)) ?? []
+            MenuScan.running = false   // Chip frei: wartende Verbindungsversuche sofort weiter
             let nets = fresh.isEmpty ? (iface.cachedScanResults() ?? []) : fresh
             var found: [String: Seen] = [:]
+            let radios = nets.map(Radio.init).sorted { $0.rssi > $1.rssi }
             for n in nets {
                 guard let s = n.ssid, !s.isEmpty else { continue }
                 if let old = found[s], old.rssi >= n.rssiValue { continue }
@@ -1174,12 +1288,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 // aber nichts Veraltetes stehen bleibt.
                 let keep = self.inRange.filter { found[$0.key] == nil && Date().timeIntervalSince($0.value.seenAt) < 30 }
                 self.inRange = found.merging(keep) { new, _ in new }
+                self.radios = radios
+                self.lastScan = Date()
+                self.enforceBlock()
+                self.checkBroken()
                 self.knownNetworks = known
                 self.scanning = false
                 if self.openMenu != nil { self.updatePanel() }
                 // direkt nach dem Einschalten liefert die Suche oft noch nichts -> kurz nachfassen
                 if found.isEmpty, retries > 0 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.scanAsync(retries: retries - 1) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.scanAsync(retries: retries - 1, force: true) }
                 }
             }
         }
@@ -1189,16 +1307,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     /// (Menü bleibt offen), fremdes -> verbinden, bei Passwortschutz vorher Passwort abfragen.
     func select(_ row: RowInfo) {
         let ssid = row.ssid
-        if row.connected { openMenu?.cancelTracking(); openOverview(); return }
+        if let bssid = row.copyText {   // Entwicklermodus: Sender-Zeile kopiert die BSSID
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(bssid, forType: .string)
+            flash(bssid, L("Kopiert", "Copied"))
+            return
+        }
+        if Prefs.shared.isBlocked(ssid) { flash(ssid, L("Gesperrt", "Blocked")); return }
+        manualChoice = ssid   // selbst gewählt: nie automatisch verlassen, auch ohne Internet
+        // Schon verbunden (auch wenn die Messung das noch nicht weiß): nicht neu verbinden — das
+        // würde die laufende Verbindung kurz kappen. Läuft gerade ein Wechsel woandershin: abbrechen.
+        if row.connected || Wifi.iface?.ssid() == ssid {
+            if joining != nil { cancelJoin(); return }
+            openMenu?.cancelTracking(); openOverview(); return
+        }
         if Prefs.shared.instantHotspot, let phone = RemoteHotspot.shared.devices[ssid] { joinHotspot(phone); return }
         // Gespeichertes Netz (offen, WPA oder Enterprise): wie Apples WLAN-Menü über das von macOS
         // gespeicherte Profil — das Passwort holt sich macOS selbst, Wifi Usage braucht keins.
         if row.known && !askAgain.contains(ssid) {
-            connect(ssid, attempt: {
+            connect(ssid, attempt: { _ in
                 let failure = CoreWiFi.joinKnown(ssid)
                 if let f = failure { NSLog("%@", "Wifi Usage: Verbinden mit \(ssid) fehlgeschlagen: \(f)") }
                 return failure
-            }, retry: {
+            }, retry: { wanted in
+                guard wanted() else { return nil }
                 NSLog("%@", "Wifi Usage: \(ssid) nicht verbunden, neuer Versuch mit frischer Suche")
                 return CoreWiFi.joinKnown(ssid, freshScan: true)
             }, completion: { [weak self] joined, message in
@@ -1218,38 +1350,90 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     func joinHotspot(_ phone: RemoteHotspot.Device) {
         let ssid = phone.name
         let known = knownNetworks.contains(ssid)
-        connect(ssid, attempt: {
+        var password: String?   // vom iPhone, nur für diesen Wechsel im Speicher
+        connect(ssid, attempt: { wanted in
             let reply = RemoteHotspot.enable(phone.object)
+            password = reply?.password
             NSLog("%@", "Wifi Usage: Hotspot \(ssid) " + (reply == nil ? "nicht geweckt" : "geweckt"))
-            guard let iface = Wifi.iface else { return "WLAN nicht verfügbar" }
-            // Bis zu 25 s gezielt suchen. Eine Suche scheitert sofort, solange der WLAN-Chip noch
-            // mit einer anderen beschäftigt ist (z. B. der Menü-Suche) — dann kurz warten.
-            let started = Date()
-            var tries = 0
-            while Date().timeIntervalSince(started) < 25 {
-                if Wifi.iface?.ssid() == ssid { return nil }   // macOS hat schon selbst verbunden
-                tries += 1
-                do {
-                    let found = try iface.scanForNetworks(withName: ssid, includeHidden: true)
-                    // iPhone-Hotspots sind immer verschlüsselt: offenes Netz gleichen Namens = Fälschung
-                    if let n = found.filter(\.needsCredentials).max(by: { $0.rssiValue < $1.rssiValue }) {
-                        NSLog("%@", "Wifi Usage: Hotspot \(ssid) nach \(tries) Suchen gefunden")
-                        if known {
-                            let failure = CoreWiFi.joinKnown(ssid)
-                            if failure == nil { return nil }
-                            NSLog("%@", "Wifi Usage: Profil für \(ssid) abgelehnt (\(failure!)), versuche mit Passwort vom iPhone")
-                        }
-                        do { try iface.associate(to: n, password: reply?.password); return nil }
-                        catch { return error.localizedDescription }
-                    }
-                    Thread.sleep(forTimeInterval: 0.3)   // noch nicht da: gleich nochmal
-                } catch {
-                    NSLog("%@", "Wifi Usage: Suche nach \(ssid): \(error.localizedDescription)")
-                    Thread.sleep(forTimeInterval: 1)   // WLAN-Chip belegt
+            return Self.findAndJoinHotspot(ssid, known: known, password: password, seconds: 25, wanted: wanted)
+        }, retry: { wanted in
+            // Frisch geweckte Hotspots lehnen den ersten Versuch oft ab: einmal ganz von vorn.
+            NSLog("%@", "Wifi Usage: Hotspot \(ssid) noch nicht verbunden, neuer Versuch")
+            return Self.findAndJoinHotspot(ssid, known: known, password: password, seconds: 10, wanted: wanted)
+        })
+    }
+
+    /// Geweckten Hotspot suchen und verbinden (läuft im Hintergrund, blockiert bis zu `seconds`).
+    /// Eine eigene Suche scheitert mit „Resource busy", solange der WLAN-Chip noch mit einer anderen
+    /// beschäftigt ist (meist die Menü-Suche) — deren Ergebnis landet aber im System-Zwischenspeicher,
+    /// darum dort jedes Mal zuerst nachsehen statt nur zu warten.
+    static func findAndJoinHotspot(_ ssid: String, known: Bool, password: String?, seconds: Double,
+                                   wanted: () -> Bool) -> String? {
+        guard let iface = Wifi.iface else { return "WLAN nicht verfügbar" }
+        // iPhone-Hotspots sind immer verschlüsselt: offenes Netz gleichen Namens = Fälschung
+        func pick(_ list: [CWNetwork]) -> CWNetwork? {
+            list.filter { $0.ssid == ssid && $0.needsCredentials }.max { $0.rssiValue < $1.rssiValue }
+        }
+        let started = Date()
+        // Gespeicherter Hotspot: frische gezielte Suche über CoreWiFi, dann über das macOS-Profil verbinden.
+        if known {
+            var n = 0
+            while Date().timeIntervalSince(started) < seconds, wanted() {
+                if iface.ssid() == ssid { return nil }
+                n += 1
+                guard let hit = CoreWiFi.scanFresh(ssid) else { break }   // Schnittstelle fehlt: alter Weg unten
+                if !hit { Thread.sleep(forTimeInterval: 0.3); continue }
+                NSLog("%@", "Wifi Usage: Hotspot \(ssid) nach \(n) Suchen gefunden"
+                      + String(format: " (%.1f s)", Date().timeIntervalSince(started)))
+                guard wanted() else { return nil }
+                MenuScan.waitUntilIdle()
+                guard let f = CoreWiFi.joinKnown(ssid) else { return nil }
+                NSLog("%@", "Wifi Usage: Profil für \(ssid) abgelehnt (\(f)), versuche CoreWLAN")
+                break
+            }
+        }
+        var tries = 0, busy = 0
+        while Date().timeIntervalSince(started) < seconds {
+            if iface.ssid() == ssid { return nil }   // macOS hat schon selbst verbunden
+            guard wanted() else { return nil }       // inzwischen anderes Netz gewählt: nichts mehr anfassen
+            tries += 1
+            var found = pick(Array(iface.cachedScanResults() ?? []))
+            if found == nil {
+                // Menü-Suche läuft: nicht dazwischenfunken, ihr Ergebnis landet gleich im Zwischenspeicher.
+                if MenuScan.running { Thread.sleep(forTimeInterval: 0.3); continue }
+                do { found = pick(Array(try iface.scanForNetworks(withName: ssid, includeHidden: true))) }
+                catch {
+                    busy += 1
+                    if busy == 1 { NSLog("%@", "Wifi Usage: Suche nach \(ssid): \(error.localizedDescription)") }
+                    Thread.sleep(forTimeInterval: 0.5)   // WLAN-Chip belegt
+                    continue
                 }
             }
-            return "Netz nicht in Reichweite"
-        }, retry: known ? { CoreWiFi.joinKnown(ssid, freshScan: true) } : nil)
+            guard let n = found else { Thread.sleep(forTimeInterval: 0.3); continue }   // noch nicht da
+            NSLog("%@", "Wifi Usage: Hotspot \(ssid) nach \(tries) Versuchen gefunden"
+                  + String(format: " (%.1f s, %d× belegt)", Date().timeIntervalSince(started), busy))
+            guard wanted() else { return nil }
+            MenuScan.waitUntilIdle()
+            if known {
+                // Kurz nach dem Wecken meldet der WLAN-Dienst oft „tmpErr": einmal kurz warten, nochmal.
+                var failure = CoreWiFi.joinKnown(ssid)
+                if failure != nil {
+                    Thread.sleep(forTimeInterval: 1)
+                    if iface.ssid() == ssid { return nil }
+                    guard wanted() else { return nil }
+                    failure = CoreWiFi.joinKnown(ssid)
+                }
+                guard let f = failure else { return nil }
+                NSLog("%@", "Wifi Usage: Profil für \(ssid) abgelehnt (\(f)), versuche mit Passwort vom iPhone")
+            }
+            do { try iface.associate(to: n, password: password); return nil }
+            catch {
+                NSLog("%@", "Wifi Usage: Verbinden mit \(ssid) per Passwort vom iPhone abgelehnt: \(error.localizedDescription)")
+                return error.localizedDescription
+            }
+        }
+        NSLog("%@", "Wifi Usage: Hotspot \(ssid) in \(Int(seconds)) s nicht gefunden (\(tries) Versuche, \(busy)× belegt)")
+        return "Netz nicht in Reichweite"
     }
 
     /// Verbinden über CoreWLAN; geschützt -> Passwort abfragen. Was das Netz verlangt, im
@@ -1350,6 +1534,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             let scanned = fresh || cached == nil
                 ? (try? iface.scanForNetworks(withName: ssid))?.max { $0.rssiValue < $1.rssiValue } : nil
             guard let network = scanned ?? cached else { return "Netz nicht in Reichweite" }
+            MenuScan.waitUntilIdle()
             do {
                 if network.isEnterprise, let c = credentials {
                     // 802.1X: Benutzername + Passwort (ohne Zertifikat-Identität)
@@ -1368,7 +1553,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 return error.localizedDescription
             }
         }
-        connect(ssid, attempt: { attempt(fresh: false) }, completion: { [weak self] joined, _ in
+        connect(ssid, attempt: { _ in attempt(fresh: false) }, completion: { [weak self] joined, _ in
             guard let self = self else { return }
             if joined { self.askAgain.remove(ssid) }
             else if credentials != nil { self.askAgain.insert(ssid) }   // nächster Klick fragt neu
@@ -1377,10 +1562,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
 
     /// Verbindungsaufbau mit „Verbinde …"-Anzeige. Ob es geklappt hat, entscheidet allein, ob man
     /// danach wirklich in diesem WLAN ist — networksetup/CoreWLAN melden teils Fehler, obwohl es klappt.
-    func connect(_ ssid: String, attempt: @escaping () -> String?, retry: (() -> String?)? = nil,
+    /// attempt/retry bekommen `wanted`: false, sobald ein anderes Netz gewählt oder abgebrochen
+    /// wurde — dann nicht mehr verbinden (sonst springt das WLAN doch noch zum alten Ziel).
+    func connect(_ ssid: String, attempt: @escaping (_ wanted: () -> Bool) -> String?,
+                 retry: ((_ wanted: () -> Bool) -> String?)? = nil,
                  completion: ((Bool, String?) -> Void)? = nil) {
         joinGeneration += 1
         let generation = joinGeneration
+        let wanted = { generation == self.joinGeneration }
         joining = ssid
         failed = nil
         updatePanel()
@@ -1397,10 +1586,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
         DispatchQueue.global(qos: .userInitiated).async {
             let started = Date()
             NSLog("%@", "Wifi Usage: Wechsel zu \(ssid) gestartet (vorher: \(Wifi.iface?.ssid() ?? "kein WLAN"))")
-            var lastMessage = attempt()
+            var lastMessage = attempt(wanted)
             var retried = false
-            if lastMessage != nil, let retry = retry {   // sofort abgelehnt: gleich nachfassen
-                lastMessage = retry()
+            if lastMessage != nil, wanted(), let retry = retry {   // sofort abgelehnt: gleich nachfassen
+                lastMessage = retry(wanted)
                 retried = true
             }
             // Beide Versuche abgelehnt: nur kurz prüfen, ob es trotzdem klappt, statt 15 s zu warten.
@@ -1409,7 +1598,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
             for step in 0..<steps {   // bis zu 15 s
                 if Wifi.iface?.ssid() == ssid { joined = true; break }
                 if generation != self.joinGeneration { break }   // inzwischen anderes Netz gewählt
-                if step == 10, !retried, let retry = retry { lastMessage = retry() ?? lastMessage }   // nach 5 s einmal nachfassen
+                if step == 10, !retried, let retry = retry { lastMessage = retry(wanted) ?? lastMessage }   // nach 5 s einmal nachfassen
                 Thread.sleep(forTimeInterval: 0.5)
             }
             NSLog("%@", "Wifi Usage: Wechsel zu \(ssid) " + (joined ? "verbunden" : "nicht verbunden")
@@ -1420,7 +1609,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 self.joining = nil
                 self.joinAnimation?.invalidate(); self.joinAnimation = nil
                 self.refresh()
-                if !joined {
+                if joined {
+                    // IP-Adresse kommt oft erst ein paar Sekunden später: bis dahin gälte das Netz
+                    // als „nicht verbunden", und ein zweiter Klick würde die neue Verbindung kappen.
+                    for delay in [2.0, 5.0] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                            self?.refresh()
+                            if self?.openMenu != nil { self?.updatePanel() }
+                        }
+                    }
+                } else {
                     // Kein Popup: kurz „Fehlgeschlagen" am Netz, wie im Apple-Menü.
                     self.failed = ssid
                     self.failedReason = lastMessage == "Netz nicht in Reichweite"
@@ -1436,6 +1634,89 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
                 self.armAutoClose()
             }
         }
+    }
+
+    /// Laufenden Wechsel abbrechen: Der Hintergrund-Versuch merkt es an der Nummer und verbindet nicht mehr.
+    func cancelJoin() {
+        guard let ssid = joining else { return }
+        NSLog("%@", "Wifi Usage: Wechsel zu \(ssid) abgebrochen")
+        joinGeneration += 1
+        joining = nil
+        joinAnimation?.invalidate(); joinAnimation = nil
+        updateTitle()
+        updatePanel()
+    }
+
+    /// Kurzer Hinweis rechts an einer Zeile („Gesperrt", „Kopiert" …), statt eines Popups.
+    func flash(_ key: String, _ text: String) {
+        failed = key
+        failedReason = text
+        updatePanel()
+        armAutoClose()
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            guard let self = self, self.failed == key else { return }
+            self.failed = nil
+            self.updatePanel()
+        }
+    }
+
+    // MARK: Gesperrte WLANs
+    var lastBlockAction: [String: Date] = [:]
+
+    /// Hat macOS sich selbst mit einem gesperrten WLAN verbunden (automatisch beitreten), wieder weg:
+    /// zum stärksten erlaubten gespeicherten Netz in Reichweite wechseln, sonst nur trennen.
+    /// Höchstens alle 30 s je Netz, damit es kein Hin und Her mit macOS gibt.
+    func enforceBlock() {
+        guard joining == nil, let ssid = Wifi.iface?.ssid(), Prefs.shared.isBlocked(ssid) else { return }
+        // Noch keine Netzsuche (z. B. direkt nach dem Start): erst suchen, sonst würde mangels bekannter
+        // Alternativen nur getrennt. Das Ende der Suche ruft enforceBlock erneut auf.
+        if lastScan == nil || scanning { scanAsync(force: true); return }
+        if let last = lastBlockAction[ssid], Date().timeIntervalSince(last) < 30 { return }
+        lastBlockAction[ssid] = Date()
+        let alternative = knownNetworks
+            .filter { $0 != ssid && !Prefs.shared.isBlocked($0) && inRange[$0] != nil }
+            .max { inRange[$0]!.rssi < inRange[$1]!.rssi }
+        NSLog("%@", "Wifi Usage: \(ssid) ist gesperrt, " + (alternative.map { "wechsle zu \($0)" } ?? "trenne"))
+        NotchPopup.shared.show(symbol: "nosign", title: L("WLAN gesperrt", "Wi-Fi blocked"),
+                               subtitle: ssid + " · " + (alternative.map { L("wechsle zu ", "joining ") + $0 }
+                                                         ?? L("getrennt", "disconnected")))
+        if let alt = alternative {
+            connect(alt, attempt: { _ in CoreWiFi.joinKnown(alt) }, completion: { joined, _ in
+                if !joined, Wifi.iface?.ssid() == ssid { Wifi.iface?.disassociate() }
+            })
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async { Wifi.iface?.disassociate() }
+        }
+    }
+
+    // MARK: Kaputtes WLAN verlassen
+    /// Hat das verbundene WLAN laut macOS keinen Ausgang (kein Gateway / keine Route) länger als die
+    /// eingestellte Zeit, zum stärksten funktionierenden gespeicherten Netz in Reichweite wechseln.
+    /// Ausnahmen: selbst im Menü gewählte Netze (Fehlersuche) und Handy-Hotspots als Ziel (mobile Daten).
+    func checkBroken() {
+        let delay = Prefs.shared.failoverDelay
+        guard delay > 0, joining == nil, let ssid = Wifi.iface?.ssid() else { brokenSince = nil; return }
+        if let m = manualChoice, m != ssid { manualChoice = nil }   // inzwischen woanders: Ausnahme vorbei
+        guard noInternet, ssid != manualChoice else { brokenSince = nil; return }
+        guard let since = brokenSince, since.ssid == ssid else {
+            brokenSince = (ssid, Date())
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.5) { [weak self] in self?.checkBroken() }
+            return
+        }
+        guard Date().timeIntervalSince(since.since) >= delay else { return }
+        // Liste zu alt: erst frisch suchen, das Ende der Suche ruft checkBroken erneut auf.
+        if lastScan.map({ Date().timeIntervalSince($0) > 60 }) ?? true { scanAsync(force: true); return }
+        let alternative = knownNetworks
+            .filter { $0 != ssid && inRange[$0] != nil && !Prefs.shared.isBlocked($0) && !NetID.isHotspot($0)
+                      && (leftBroken[$0].map { Date().timeIntervalSince($0) > 300 } ?? true) }
+            .max { inRange[$0]!.rssi < inRange[$1]!.rssi }
+        guard let alt = alternative else { return }   // nichts Besseres in Reichweite: bleiben
+        brokenSince = nil
+        leftBroken[ssid] = Date()
+        NSLog("%@", "Wifi Usage: \(ssid) seit \(Int(delay)) s ohne Ausgang, wechsle zu \(alt)")
+        NotchPopup.shared.show(symbol: "wifi.exclamationmark", title: L("Kein Internet", "No internet"),
+                               subtitle: ssid + " · " + L("wechsle zu ", "joining ") + alt)
+        connect(alt, attempt: { _ in CoreWiFi.joinKnown(alt) })
     }
 
     func setPower(_ on: Bool) {
@@ -1511,6 +1792,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, CLLo
     @objc func refresh() {
         Meter.sample(); updateTitle()
         if let net = Meter.currentNet { Meter.checkLimit(net.name) }
+        enforceBlock()
+        checkBroken()
         if overviewWindow?.isVisible == true { overview.reload() }
     }
 }
@@ -1522,6 +1805,30 @@ struct Seen {
     let network: CWNetwork?
     let seenAt: Date
     var enterprise = false   // WPA/WPA2/WPA3-Enterprise (802.1X): Benutzername + Passwort
+}
+
+/// Ein einzelner Sender (Access Point) aus der Netzsuche — für den Entwicklermodus.
+struct Radio {
+    let ssid: String?
+    let bssid: String?    // nur mit Ortungsdienste-Freigabe
+    let rssi: Int
+    let channel: Int?
+    let band: String?     // GHz: "2.4", "5", "6"
+    let secure: Bool
+
+    init(_ n: CWNetwork) {
+        ssid = n.ssid.flatMap { $0.isEmpty ? nil : $0 }
+        bssid = n.bssid
+        rssi = n.rssiValue
+        channel = n.wlanChannel?.channelNumber
+        switch n.wlanChannel?.channelBand {
+        case .band2GHz?: band = "2.4"
+        case .band5GHz?: band = "5"
+        case .band6GHz?: band = "6"
+        default: band = nil
+        }
+        secure = n.needsCredentials
+    }
 }
 
 extension CWNetwork {
@@ -1822,6 +2129,7 @@ struct RowInfo {
     let tooltip: String?
     var joining = false
     var subtitle: String? = nil
+    var copyText: String? = nil   // Entwicklermodus: Klick kopiert das (BSSID) statt zu verbinden
 }
 
 /// Inhalt des WLAN-Bereichs.
@@ -1833,6 +2141,8 @@ struct PanelContent {
     var others: [RowInfo] = []
     var othersHint: String?
     var scanning = false
+    var radios: [RowInfo]? = nil   // nur im Entwicklermodus
+    var radiosExpanded = false
 }
 
 /// WLAN-Bereich des Menüs als ein einziger Eintrag: Schalter, Persönlicher Hotspot, Bekannte und
@@ -1841,6 +2151,7 @@ final class WifiPanelView: NSView {
     var onPower: ((Bool) -> Void)?
     var onSelect: ((RowInfo) -> Void)?
     var onToggleOthers: ((Bool) -> Void)?
+    var onToggleRadios: ((Bool) -> Void)?
     var onActivity: (() -> Void)?
     private var content = PanelContent(wifiOn: false, othersExpanded: false)
 
@@ -1914,6 +2225,22 @@ final class WifiPanelView: NSView {
             if content.othersExpanded {
                 if let h = content.othersHint { label(h, header: false) }
                 content.others.forEach(row)
+            }
+
+            if let radios = content.radios {
+                separator()
+                let d = DisclosureRowView(title: L("Alle Sender", "All Access Points") + " (\(radios.count))",
+                                          expanded: content.radiosExpanded)
+                d.keepsMenuOpen = true
+                d.onHover = { [weak self] in self?.onActivity?() }
+                d.onClick = { [weak self] in
+                    guard let self = self else { return }
+                    self.content.radiosExpanded.toggle()
+                    self.onToggleRadios?(self.content.radiosExpanded)
+                    self.relayout()
+                }
+                add(d)
+                if content.radiosExpanded { radios.forEach(row) }
             }
         }
 
@@ -2587,11 +2914,20 @@ struct SettingsView: View {
                 }
                 Toggle(L("Bei Anmeldung starten", "Launch at login"), isOn: $prefs.launchAtLogin)
                 Toggle(L("iPhone-Hotspot immer anzeigen", "Always show iPhone hotspot"), isOn: $prefs.instantHotspot)
+                Toggle(L("Entwicklermodus", "Developer mode"), isOn: $prefs.developerMode)
+                if prefs.developerMode {
+                    Picker(L("WLAN ohne Internet verlassen", "Leave Wi-Fi without internet"), selection: $prefs.failoverSetting) {
+                        Text(L("Nie", "Never")).tag(0)
+                        Text(L("nach 10 s", "after 10 s")).tag(10)
+                        Text(L("nach 30 s", "after 30 s")).tag(30)
+                        Text(L("nach 60 s", "after 60 s")).tag(60)
+                    }
+                }
             } header: {
                 Text(L("Allgemein", "General"))
             } footer: {
-                Text(L("Deine iPhones und iPads mit derselben Apple-ID stehen im Menü, auch wenn ihr Hotspot aus ist. Ein Klick schaltet ihn per Bluetooth ein und verbindet – wie bei Apple.",
-                       "Your iPhones and iPads with the same Apple ID appear in the menu even when their hotspot is off. One click turns it on via Bluetooth and joins – like Apple's menu."))
+                Text(L("Deine iPhones und iPads mit derselben Apple-ID stehen im Menü, auch wenn ihr Hotspot aus ist. Ein Klick schaltet ihn per Bluetooth ein und verbindet – wie bei Apple.\nEntwicklermodus: Das Menü zeigt zusätzlich jeden einzelnen Sender (BSSID, Kanal, Band, Signal) statt nur nach Namen gruppiert, beim verbundenen Netz Gateway und BSSID. Klick auf einen Sender kopiert die BSSID.\nHat ein WLAN laut macOS keinen Ausgang (kein Gateway), wechselt Wifi Usage nach 30 s zum besten gespeicherten Netz – außer du hast es selbst im Menü gewählt. Im Entwicklermodus einstellbar.",
+                       "Your iPhones and iPads with the same Apple ID appear in the menu even when their hotspot is off. One click turns it on via Bluetooth and joins – like Apple's menu.\nDeveloper mode: the menu also lists every single access point (BSSID, channel, band, signal) instead of grouping by name, and shows gateway and BSSID for the connected network. Clicking an access point copies its BSSID.\nIf a Wi-Fi has no way out according to macOS (no gateway), Wifi Usage switches to the best saved network after 30 s – unless you picked it yourself in the menu. Adjustable in developer mode."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -2615,6 +2951,29 @@ struct SettingsView: View {
             } footer: {
                 Text(L("Die Ortungsdienste braucht macOS nur, um den WLAN-Namen herauszugeben – der Standort wird nie abgefragt. Wifi Usage liest nur die Netzwerkzähler des Systems und seinen eigenen Datenordner, daher ist kein Festplattenvollzugriff nötig.",
                        "macOS only reveals the Wi-Fi name to apps with Location Services – your location is never requested. Wifi Usage only reads the system's network counters and its own data folder, so no Full Disk Access is needed."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                ForEach(prefs.blocked, id: \.self) { ssid in
+                    HStack {
+                        Label { Text(verbatim: ssid) } icon: { Image(systemName: "nosign") }
+                        Spacer()
+                        Button(L("Entsperren", "Unblock")) { prefs.blocked.removeAll { $0 == ssid } }
+                    }
+                }
+                let candidates = Actions.networkNames().filter { !prefs.isBlocked($0) }
+                Menu(L("WLAN sperren …", "Block Wi-Fi …")) {
+                    ForEach(candidates, id: \.self) { ssid in
+                        Button { prefs.blocked.append(ssid) } label: { Text(verbatim: ssid) }
+                    }
+                }
+                .disabled(candidates.isEmpty)
+            } header: {
+                Text(L("Gesperrte WLANs", "Blocked Wi-Fi networks"))
+            } footer: {
+                Text(L("Mit gesperrten WLANs verbindet Wifi Usage nie. Verbindet sich macOS selbst damit, wechselt Wifi Usage zum besten erlaubten gespeicherten Netz oder trennt.",
+                       "Wifi Usage never joins blocked networks. If macOS joins one by itself, Wifi Usage switches to the best allowed saved network or disconnects."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
